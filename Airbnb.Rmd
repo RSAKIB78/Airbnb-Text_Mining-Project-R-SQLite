@@ -1,0 +1,2934 @@
+---
+title: "Git"
+output: html_document
+date: '2022-12-03'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(purrr)
+library(data.table)
+library(RSQLite)
+library(tidyr)
+library(stringr)
+library(tidytext)
+library(udpipe)
+library(qdap)
+library(textstem)
+library(hunspell)
+library(stringi)
+library(future)
+library(ggridges)
+library(future.apply)
+library(gridExtra)
+library(grid)
+library(emmeans)
+library(usethis)
+library(kableExtra)
+```
+
+# Reading the review datasets from 16 cities
+```{r eval=FALSE}
+airbnb_reviews <- data.frame()
+
+all_reviews <- list.files("./InsideAirBnb/", pattern = "reviews", recursive = TRUE)
+
+airbnb_reviews <- lapply(all_reviews, function(x){
+  df <- fread(paste0("./InsideAirBnb/", x))
+  return(df)
+})
+
+airbnb_reviews <- lapply(airbnb_reviews, function(i) {
+    i$listing_id <- as.integer(i$listing_id)
+    i$id <- as.integer(i$id)
+    i$date <- as.Date(i$date, format = "%Y-%m-%d")
+    return(i)
+})
+
+airbnb_reviews <- rbindlist(airbnb_reviews, fill = TRUE)
+#saveRDS(airbnb_reviews, "airbnb_reviews.rds")
+#write.csv(airbnb_reviews, "airbnb_reviews.csv")
+```
+
+# Reading the listings datasets from 16 cities
+```{r eval=FALSE}
+airbnb_listings <- data.frame()
+
+all_listings <- list.files("./InsideAirBnb/", pattern = "listing", recursive = TRUE)
+
+airbnb_listings <- lapply(all_listings, function(x){
+  df <- fread(paste0("./InsideAirBnb/", x))
+  return(df)
+})
+
+airbnb_listings <- lapply(airbnb_listings, function(i) {
+    i$id <- as.integer(i$id)
+    return(i)
+})
+
+airbnb_listings <- rbindlist(airbnb_listings, fill = TRUE)
+saveRDS(airbnb_listings, "airbnb_listings.rds")
+write.csv(airbnb_listings, "airbnb_listings.csv")
+```
+
+# Reading the calendar datasets from 16 cities
+```{r eval=FALSE}
+airbnb_calendars <- data.frame()
+
+all_calendars <- list.files("./InsideAirBnb/", pattern = "calendar", recursive = TRUE)
+
+airbnb_calendars <- lapply(all_calendars, function(x){
+  df <- fread(paste0("./InsideAirBnb/", x))
+  return(df)
+})
+
+airbnb_calendars <- rbindlist(airbnb_calendars, fill = TRUE)
+saveRDS(airbnb_calendars, "airbnb_calendars.rds")
+fwrite(airbnb_calendars, "airbnb_calendars.csv")
+```
+
+#Loading the datasets to database
+```{r eval=FALSE}
+connection <- dbConnect(SQLite(), "airbnb.db")
+
+airdna_files <- list.files("./csv/")
+
+for (file in airdna_files) {
+  this_filepath <- paste0("./csv/",file)
+  this_file_contents <- fread(this_filepath)
+
+  table_name <- gsub(".csv","",file)
+  
+  RSQLite::dbWriteTable(connection,table_name,this_file_contents,overwrite=TRUE)
+  
+}
+dbListTables(connection)
+```
+
+#Creating datasets for listings during 2019-2022
+```{r eval=FALSE}
+airbnb_listings <- readRDS("./rds/airbnb_listings.rds")
+airbnb_listings <- dbGetQuery(connection, "SELECT id, name, description, neighborhood_overview, host_id, host_name, host_about, host_response_time, 
+       host_response_rate, host_acceptance_rate, host_is_superhost, host_listings_count, host_total_listings_count, 
+       host_has_profile_pic, host_identity_verified, neighbourhood, property_type, room_type, accommodates, instant_bookable,
+       bathrooms_text, bedrooms, beds, price, minimum_nights, has_availability, availability_30, availability_60, availability_90,
+       availability_365, number_of_reviews, number_of_reviews_ltm, number_of_reviews_l30d, review_scores_rating, review_scores_accuracy,
+       review_scores_cleanliness, review_scores_checkin, review_scores_communication, review_scores_location, review_scores_value
+FROM airbnb_listings
+GROUP BY id
+ORDER BY last_scraped DESC
+")
+fwrite(airbnb_listings, "airbnb_listings.csv")
+```
+
+# Creating datasets for reviews during 2019-2022
+```{r}
+airbnb_reviews <- readRDS("./rds/airbnb_reviews.rds")
+
+#Subsetting reviews by years
+reviews_2022 <- airbnb_reviews[(airbnb_reviews$date >= "2022-01-01" & airbnb_reviews$date <= "2022-12-31"),]
+reviews_2021 <- airbnb_reviews[(airbnb_reviews$date >= "2021-01-01" & airbnb_reviews$date <= "2021-12-31"),]
+reviews_2020 <- airbnb_reviews[(airbnb_reviews$date >= "2020-01-01" & airbnb_reviews$date <= "2020-12-31"),]
+reviews_2019 <- airbnb_reviews[(airbnb_reviews$date >= "2019-01-01" & airbnb_reviews$date <= "2019-12-31"),]
+
+#Taking samples
+airbnb_reviews_2019 <- sample_n(reviews_2019, 150000)
+airbnb_reviews_2020 <- sample_n(reviews_2020, 150000)
+airbnb_reviews_2021 <- sample_n(reviews_2021, 150000)
+airbnb_reviews_2022 <- sample_n(reviews_2022, 150000)
+
+#Creating backups
+fwrite(airbnb_reviews_2019, "reviews_2019.csv")
+fwrite(airbnb_reviews_2020, "reviews_2020.csv")
+fwrite(airbnb_reviews_2021, "reviews_2021.csv")
+fwrite(airbnb_reviews_2022, "reviews_2022.csv")
+```
+
+# Reading all the csv
+```{r}
+airbnb_calendars <- fread("./csv/airbnb_calendars.csv", na.strings = c("", " ", "N/A"))
+airbnb_reviews_2019 <- fread("./database_extracts/reviews_2019.csv", na.strings = c("", " ", "N/A"))
+airbnb_reviews_2020 <- fread("./database_extracts/reviews_2020.csv", na.strings = c("", " ", "N/A"))
+airbnb_reviews_2021 <- fread("./database_extracts/reviews_2021.csv", na.strings = c("", " ", "N/A"))
+airbnb_reviews_2022 <- fread("./database_extracts/reviews_2022.csv", na.strings = c("", " ", "N/A"))
+airbnb_listings <- fread("./database_extracts/airbnb_listings.csv", na.strings = c("", " ", "N/A"))
+```
+
+# Combining to get master datasets
+```{r}
+airbnb_reviews_2019_2022 <- rbind(airbnb_reviews_2019, airbnb_reviews_2020, airbnb_reviews_2021, airbnb_reviews_2022)
+saveRDS(airbnb_reviews_2019_2022, "airbnb_reviews_2019_2022.rds")
+airbnb_reviews_2019_2022 <- readRDS("airbnb_reviews_2019_2022.rds")
+airbnb_reviews_2019_2022$row <- 1:nrow(airbnb_reviews_2019_2022)
+airbnb_reviews_2019_2022 <- airbnb_reviews_2019_2022 %>% select(7,1,3,4,5,6)
+all_reviews_listings <- left_join(airbnb_reviews_2019_2022, airbnb_listings, by = c("listing_id" = "id"))
+saveRDS(all_reviews_listings, "all_reviews_listings.rds")
+```
+
+# Normalising all_reviews_listings
+```{r}
+all_reviews_listings <- readRDS("all_reviews_listings.rds")
+#Removing duplicates
+all_reviews_listings <- distinct(all_reviews_listings)
+
+# Seperating dates
+all_reviews_listings[, "year"] <- as.integer(format(all_reviews_listings[,"date"], "%Y"))
+all_reviews_listings[, "month"] <- as.integer(format(all_reviews_listings[,"date"], "%m"))
+all_reviews_listings <- all_reviews_listings %>% filter(year %in% c(2019, 2020, 2021, 2022))
+all_reviews_listings$month_year <- format(all_reviews_listings$date, "%Y-%m")
+
+# host_location
+all_reviews_listings <- all_reviews_listings %>% separate(neighbourhood, c("city", "province", "country"), sep = ", ")
+all_reviews_listings <- all_reviews_listings[!is.na(all_reviews_listings$city),]
+all_reviews_listings <- all_reviews_listings %>% filter(str_detect(city, regex("Amsterdam|Bangkok|Barcelona|Kong|Istanbul|London| Melbourne|York|Paris|Porto|Rome|Francisco|Singapore|Sydney|Madrid|Vienna", ignore.case = TRUE)))
+all_reviews_listings <- all_reviews_listings %>% mutate(city = case_when(
+                                                                          str_detect(city, "Amsterdam") ~ "Amsterdam",
+                                                                          str_detect(city, "Bangkok") ~ "Bangkok",
+                                                                          str_detect(city, "Barcelona") ~ "Barcelona",
+                                                                          str_detect(city, "Hong Kong") ~ "Hong Kong",
+                                                                          str_detect(city, "Istanbul") ~ "Istanbul",
+                                                                          str_detect(city, "London") ~ "London",
+                                                                          str_detect(city, "Melbourne") ~ "Melbourne",
+                                                                          str_detect(city, "New York") ~ "New York",
+                                                                          str_detect(city, "Paris") ~ "Paris",
+                                                                          str_detect(city, "Porto") ~ "Porto",
+                                                                          str_detect(city, "Rome") ~ "Rome",
+                                                                          str_detect(city, "San Francisco") ~ "San Francisco",
+                                                                          str_detect(city, "Singapore") ~ "Singapore",
+                                                                          str_detect(city, "Sydney") ~ "Sydney",
+                                                                          str_detect(city, "Madrid") ~ "Madrid",
+                                                                          str_detect(city, "Vienna") ~ "Vienna",
+                                                                          TRUE ~ city))
+all_reviews_listings$city <- str_replace(all_reviews_listings$city, "New-York", "New York")
+
+all_reviews_listings <- all_reviews_listings %>% mutate(country = case_when(
+                                                                          str_detect(city, "Amsterdam") ~ "Netherlands",
+                                                                          str_detect(city, "Bangkok") ~ "Thailand",
+                                                                          str_detect(city, "Barcelona") ~ "Spain",
+                                                                          str_detect(city, "Hong Kong") ~ "Hong Kong",
+                                                                          str_detect(city, "Istanbul") ~ "Turkey",
+                                                                          str_detect(city, "London") ~ "UK",
+                                                                          str_detect(city, "Melbourne") ~ "Australia",
+                                                                          str_detect(city, "New York") ~ "USA",
+                                                                          str_detect(city, "Paris") ~ "France",
+                                                                          str_detect(city, "Porto") ~ "Portugal",
+                                                                          str_detect(city, "Rome") ~ "Italy",
+                                                                          str_detect(city, "San Francisco") ~ "USA",
+                                                                          str_detect(city, "Singapore") ~ "Singapore",
+                                                                          str_detect(city, "Sydney") ~ "Australia",
+                                                                          str_detect(city, "Madrid") ~ "Spain",
+                                                                          str_detect(city, "Vienna") ~ "Austria",
+                                                                          TRUE ~ country))
+all_reviews_listings$city <- as.factor(all_reviews_listings$city)
+all_reviews_listings$country <- as.factor(all_reviews_listings$country)
+all_reviews_listings <- all_reviews_listings %>% dplyr::select(-"province")
+
+#Host_response_time
+all_reviews_listings$host_response_time <- as.factor(all_reviews_listings$host_response_time)
+all_reviews_listings$host_response_time <- factor(all_reviews_listings$host_response_time, levels = c("within an hour", "within a few hours", "within a day", "a few days or more"))
+levels(all_reviews_listings$host_response_time)
+
+#Replacing strings
+all_reviews_listings$host_response_rate <- str_replace(all_reviews_listings$host_response_rate, "%", "")
+all_reviews_listings$host_acceptance_rate <- str_replace(all_reviews_listings$host_acceptance_rate, "%", "")
+
+#Bathrooms
+all_reviews_listings$bathrooms_text <- str_replace(all_reviews_listings$bathrooms_text, "baths", "bath")
+all_reviews_listings$bathrooms_text <- str_replace(all_reviews_listings$bathrooms_text, "bath", "")
+all_reviews_listings <- all_reviews_listings %>% separate(bathrooms_text, c("bathrooms", "bathroom_type"), sep = " ")
+
+#Dealing with NA. Converted everything to NA
+all_reviews_listings <- all_reviews_listings %>% mutate_all(na_if, "")
+
+#Price
+all_reviews_listings$price <- str_replace(all_reviews_listings$price, "\\$", "")
+all_reviews_listings$price <- as.numeric(all_reviews_listings$price)
+
+#COVID Period identification
+all_reviews_listings <- all_reviews_listings %>% mutate(period = ifelse(date < "2020-04-01", "Before Pandemic", "After Pandemic"))
+all_reviews_listings$period <- factor(all_reviews_listings$period, levels = c("Before Pandemic", "After Pandemic"))
+
+#Combining listings with period
+all_reviews_listings$listing_id <- paste(all_reviews_listings$listing_id, sep = "_", all_reviews_listings$period)
+all_reviews_listings <- all_reviews_listings %>% mutate(period = ifelse(date < "2020-04-01", "Before Pandemic", "After Pandemic"))
+all_reviews_listings$period <- factor(all_reviews_listings$period, levels = c("Before Pandemic", "After Pandemic"))
+
+#Getting occupancy rates
+airbnb_calendars$price <- str_replace(airbnb_calendars$price, "\\$", "")
+airbnb_calendars$price <- as.integer(airbnb_calendars$price)
+airbnb_calendars$occupied <- ifelse(airbnb_calendars$available=="t", 1, 0)
+airbnb_calendars$month_year <- format(airbnb_calendars$date, "%Y-%m")
+all_calendars <- airbnb_calendars %>% group_by(listing_id, month_year) %>% summarise(occupancy_rate = sum(occupied)/n(),
+                                                                                     avg_price = mean(price))
+all_calendars <- all_calendars %>% mutate(period = ifelse(month_year < "2020-04", "Before Pandemic", "After Pandemic"))
+
+na_rows <- which(is.na(all_reviews_listings$comments))
+all_reviews_listings <- all_reviews_listings[-na_rows,]
+na_rows <- which(is.na(all_reviews_listings$price))
+all_reviews_listings <- all_reviews_listings[-na_rows,]
+
+
+colSums((is.na(all_reviews_listings)))
+all_reviews_listings <- all_reviews_listings[, -c(13,14,15,19,27,28,29,30)]
+
+#saveRDS(all_reviews_listings, "all_reviews_listings.rds")
+#saveRDS(all_calendars, "all_calendars.rds")
+```
+
+# Getting test dataset for reviews of 2022
+```{r}
+test_data <- all_reviews_listings[all_reviews_listings$date >= "2022-01-01",]
+saveRDS(test_data, "test_data.rds")
+```
+
+#Getting Covid Data
+```{r}
+#Reading the dataset
+covid_data <- read_csv("WHO-COVID-19-global-data.csv")
+
+#Filtering
+countries <- c("Thailand", "Spain", "Hong Kong", "Turkey", "The United Kingdom", "Australia", "United States of America", "Singapore", "Austria", "Netherlands", "France", "Portugal", "Italy")
+covid_data <- covid_data %>% filter(Country %in% countries)
+covid_data <- covid_data[(covid_data$Date_reported >= "2019-01-01" & covid_data$Date_reported <= "2021-12-31"),]
+covid_data <- covid_data %>% filter(New_cases >= 0)
+
+#Formatting the data
+covid_data$Country <- as.factor(covid_data$Country) 
+levels(covid_data$Country)
+str(covid_data)
+
+#Visualizing the data
+ggplot(covid_data, aes(Date_reported, New_cases, color = Country)) + geom_point() + geom_line() + geom_hline(yintercept = 0)
+```
+
+# Normalizing all_listings_calendars
+```{r}
+#COVID Period identification
+airbnb_calendars <- airbnb_calendars %>% mutate(period = ifelse(date < "2020-04-01", "Before Pandemic", "After Pandemic"))
+airbnb_calendars$period <- factor(airbnb_calendars$period, levels = c("Before Pandemic", "After Pandemic"))
+
+#Combining listings with period
+airbnb_calendars$listing_id <- str_c(airbnb_calendars$listing_id, "_", airbnb_calendars$period)
+airbnb_calendars <- airbnb_calendars %>% mutate(period = ifelse(date < "2020-04-01", "Before Pandemic", "After Pandemic"))
+airbnb_calendars$period <- factor(airbnb_calendars$period, levels = c("Before Pandemic", "After Pandemic"))
+
+#Combining with master dataset
+listings <- all_reviews_listings %>% select(listing_id) %>% distinct(.)
+all_listings_calendars <- left_join(listings, airbnb_calendars, by = "listing_id")
+
+#Date
+all_listings_calendars[, "year"] <- format(all_listings_calendars[,"date"], "%Y")
+all_listings_calendars[, "month"] <- format(all_listings_calendars[,"date"], "%m")
+
+#Prices
+all_listings_calendars$price <- str_replace(all_listings_calendars$price, "\\$", "")
+all_listings_calendars$price <- as.numeric(all_listings_calendars$price)
+
+all_listings_calendars$adjusted_price <- str_replace(all_listings_calendars$adjusted_price, "\\$", "")
+all_listings_calendars$adjusted_price <- as.numeric(all_listings_calendars$adjusted_price)
+
+#Getting occupancy rates
+airbnb_calendars$price <- str_replace(airbnb_calendars$price, "\\$", "")
+airbnb_calendars$price <- as.integer(airbnb_calendars$price)
+airbnb_calendars$occupied <- ifelse(airbnb_calendars$available=="t", 1, 0)
+airbnb_calendars$month_year <- format(airbnb_calendars$date, "%Y-%m")
+all_calendars <- airbnb_calendars %>% group_by(listing_id, month_year) %>% summarise(occupancy_rate = sum(occupied)/n(),
+                                                                                     avg_price = mean(price))
+all_calendars <- all_calendars %>% mutate(period = ifelse(month_year < "2020-04", "Before Pandemic", "After Pandemic"))
+
+saveRDS(all_listings_calendars, "all_listings_calendars.rds")
+```
+
+#Processing for test data
+```{r}
+test_data <- readRDS("test_data.rds")
+test_data <- test_data %>% dplyr::select(row, listing_id, review_scores_rating, price, month_year, comments, period, city)
+
+#Replacing the digits with empty space
+test_data$comments <- gsub('[[:digit:]]+',' ', test_data$comments)
+
+#Replacing the punctuations with empty space
+test_data$comments <- gsub('[[:punct:]]+',' ', test_data$comments)
+
+#Additional cleaning
+test_data$comments <- bracketX(test_data$comments)
+test_data$comments <- replace_contraction(test_data$comments)
+test_data$comments <- replace_symbol(test_data$comments)
+
+# Remove spaces and newlines
+test_data$comments <- gsub("\n", " ", test_data$comments)
+test_data$comments <- gsub("^\\s+", "", test_data$comments)
+test_data$comments <- gsub("\\s+$", "", test_data$comments)
+test_data$comments <- gsub("[ |\t]+", " ", test_data$comments) #spaces
+
+#Getting the character lengths
+test_data$char_length <- nchar(test_data$comments)
+
+#Plotting the lengths 
+hist(test_data$char_length, breaks = 300, main = "Review Lengths")
+
+#Filtering for minimum length of 100
+test_data <- test_data %>% filter(char_length>100)
+hist(test_data$char_length,breaks = 300,main = "Review Length -Left trim to 100")
+
+#Filtering for maximum length of 1400
+test_data <- test_data %>% filter(char_length<1200)
+hist(test_data$char_length,breaks = 300,main = "Review Length(All) -Right trim to 1000")
+
+#Cleaning the language of the reviews
+test_data$comments <- iconv(test_data$comments)
+test_data$language <- cld2::detect_language(test_data$comments)
+test_data %>% filter(language =="en") -> test_data_en
+saveRDS(test_data_en, "test_data_en.rds")
+```
+
+# Getting the english texts
+```{r}
+all_reviews_listings <- readRDS("all_reviews_listings.rds")
+review_data <- all_reviews_listings %>% dplyr::select(row, listing_id, review_scores_rating, month_year, comments, description,
+                                               neighborhood_overview, host_about, period, city)
+
+#Replacing the digits with empty space
+review_data$comments <- gsub('[[:digit:]]+',' ', review_data$comments)
+
+#Replacing the punctuations with empty space
+review_data$comments <- gsub('[[:punct:]]+',' ', review_data$comments)
+
+#Additional cleaning
+review_data$comments <- bracketX(review_data$comments)
+review_data$comments <- replace_contraction(review_data$comments)
+review_data$comments <- replace_symbol(review_data$comments)
+
+# Remove spaces and newlines
+review_data$comments <- gsub("\n", " ", review_data$comments)
+review_data$comments <- gsub("^\\s+", "", review_data$comments)
+review_data$comments <- gsub("\\s+$", "", review_data$comments)
+review_data$comments <- gsub("[ |\t]+", " ", review_data$comments) #spaces
+
+#Getting the character lengths
+review_data$char_length <- nchar(review_data$comments)
+
+#Plotting the lengths 
+hist(review_data$char_length, breaks = 300, main = "Review Lengths")
+
+#Filtering for minimum length of 100
+review_data <- review_data %>% filter(char_length>100)
+hist(review_data$char_length,breaks = 300,main = "Review Length -Left trim to 100")
+
+#Filtering for maximum length of 1400
+review_data <- review_data %>% filter(char_length<1200)
+hist(review_data$char_length,breaks = 300,main = "Review Length(All) -Right trim to 1000")
+
+#Cleaning the language of the reviews
+review_data$comments <- iconv(review_data$comments)
+review_data$language <- cld2::detect_language(review_data$comments)
+review_data %>% filter(language =="en") -> review_data_en
+```
+
+# Getting listing description and cleaning
+```{r}
+#Replacing the digits with empty space
+review_data_en$description <- gsub('[[:digit:]]+',' ', review_data_en$description)
+
+#Replacing the punctuations with empty space
+review_data_en$description <- gsub('[[:punct:]]+',' ', review_data_en$description)
+
+#Additional cleaning
+review_data_en$description <- bracketX(review_data_en$description)
+review_data_en$description <- replace_contraction(review_data_en$description)
+review_data_en$description <- replace_symbol(review_data_en$description)
+
+# Remove spaces and newlines
+review_data_en$description <- gsub("\n", " ", review_data_en$description)
+review_data_en$description <- gsub("^\\s+", "", review_data_en$description)
+review_data_en$description <- gsub("\\s+$", "", review_data_en$description)
+review_data_en$description <- gsub("[ |\t]+", " ", review_data_en$description) #spaces
+
+#Lemmatizing
+lemma <- review_data_en %>% dplyr::select(listing_id, description) %>% distinct(.)
+lemma <- lemma %>% unnest_tokens(word, description)
+lemma$word <- lemmatize_words(lemma$word)
+lemma <- lemma %>% group_by(listing_id) %>% summarise(description = paste(word, collapse = " "))
+review_data_en$description <- NULL
+review_data_en <- review_data_en %>% left_join(lemma)
+
+#Cleaning the language
+review_data_en$description <- iconv(review_data_en$description)
+review_data_en$desc_language <- cld2::detect_language(review_data_en$description)
+review_data_en %>% filter(desc_language =="en") -> review_data_en
+```
+
+# Checking for spelling mistakes
+```{r eval=FALSE}
+#Getting the reviews column
+reviews <- review_data_en %>% arrange(row) %>% dplyr::select(row,comments)
+
+#Tokenizing the reviews
+tokens_for_spellcheck <- unnest_tokens(reviews,word,comments)
+
+#Getting the unique words
+unique_words <- unique(tokens_for_spellcheck$word)
+head(unique_words)
+length(unique_words)
+
+#Finding the misspelled words
+mispells <- hunspell(unique_words)
+
+#Getting the unique spelling mistake
+mispells <- unique(unlist(mispells))
+length(mispells)
+
+#Getting correct word suggestions
+suggestive_words <- hunspell_suggest(mispells)
+suggestive_words <- unlist(lapply(suggestive_words, function(x) x[1]))
+head(suggestive_words)
+mistakes.list <- as.data.frame(cbind(mispells,suggestive_words))
+freq_mistake <- count(tokens_for_spellcheck,word)
+freq_mistake <- inner_join(freq_mistake, mistakes.list, by = c("word" = "mispells"))
+words_suggestion<-arrange(freq_mistake,desc(n))
+word_NA <- words_suggestion %>% filter(is.na(suggestive_words))
+
+#Manually dealing with the spelling suggestions
+#write.csv(words_suggestion,"words_suggestion.csv")
+#write.csv(word_NA,"word_NA.csv")
+
+#Reading the prepared data
+words_suggestion <- read.csv("words_suggestion.csv")
+words_suggestion <- words_suggestion %>% dplyr::select(-X) %>% na.omit()
+word_NA <- read.csv("word_NA.csv")
+word_NA <- word_NA %>% dplyr::select(-X) %>% na.omit()
+
+words_suggestions <- rbind(words_suggestion,word_NA)
+
+words_suggestions <- arrange(words_suggestions)
+sum(is.na(words_suggestions))
+
+#Saving the final data
+#write.csv(words_suggestions, "words_suggestions.csv")
+
+#Replacing the mistakes words with suggestive ones
+word.list <- read.csv("words_suggestions.csv", stringsAsFactors = FALSE)
+mistake.words <- paste0(" ", word.list$word, " ")
+correct.words <- paste0(" ", word.list$suggestive_words, " ")
+
+mistake.replace <- function(df) {
+ df$comments <- stri_replace_all_regex(df$comments, mistake.words, correct.words, vectorize_all = FALSE)
+ return(df)
+}
+
+#Defining the number of cores
+ncores <- 6L
+plan(multiprocess, workers = ncores)
+
+# split comments based on available cores
+corpus_splitted <- split(reviews, seq(1, nrow(reviews), by=5))
+reviews <- future_lapply(corpus_splitted, mistake.replace)
+reviews <- rbindlist(reviews)
+reviews <- as.data.frame(reviews)
+reviews <- reviews %>% arrange(row)
+
+#Creating a backup of the correct reviews
+saveRDS(reviews, "spell_mistake_correction.rds")
+
+#Replacing the reviews with the corrected reviews
+review_data_en$comments <- reviews$comments
+
+#Creating a backup
+#saveRDS(review_data_en, "review_data_en.rds")
+```
+
+# Tokenizing reviews by listings
+```{r}
+review_data_en <- readRDS("review_data_en.rds")
+
+#Grouping the reviews by listings
+review_data_by_listings <- review_data_en %>%
+ unnest_tokens(word,comments)%>%
+ group_by(listing_id, month_year) %>%
+ summarise(grouped_reviews = paste(word,collapse = " "))
+
+saveRDS(review_data_by_listings, "review_data_by_listings.rds")
+
+#Splitting the dataset
+split_size <- 100
+
+tokens_list <- split(review_data_by_listings,
+                      rep(1:ceiling(nrow(review_data_by_listings)/split_size),
+                      each=split_size,
+                      length.out=nrow(review_data_by_listings)))
+
+# Tokenization
+review_tokens_by_listings <- data.frame()
+
+for(i in 1:length(tokens_list)){
+      review_tokens <- tokens_list[[i]] %>%
+      unnest_tokens(word,grouped_reviews) %>%
+      count(word,listing_id) %>%
+      anti_join(stop_words)
+      print(i)
+ 
+      review_tokens_by_listings <- bind_rows(review_tokens_by_listings,review_tokens)
+}
+
+#Lemmatizing the tokens
+review_tokens_by_listings$word <- lemmatize_words(review_tokens_by_listings$word)
+```
+
+# Filtering tokens
+```{r}
+#Finding the token lengths
+review_tokens_by_listings$token_length <- nchar(review_tokens_by_listings$word)
+
+#Checking the distribution of the lengths
+view(review_tokens_by_listings %>% group_by(token_length) %>% summarise(total =n()))
+
+#Removing the short tokens
+review_tokens_by_listings <- review_tokens_by_listings %>% filter(token_length > 2)
+
+#Checking the longest tokens
+view(review_tokens_by_listings %>% group_by(token_length) %>% summarise(total =n()) %>% arrange(desc(token_length)))
+
+#Removing excessively long tokens
+review_tokens_by_listings <- review_tokens_by_listings %>% filter(token_length<=15)
+
+#Creating backups
+#saveRDS(review_data_by_listings, "review_data_by_listings.rds")
+
+#Getting the frequency of each token
+review_tokens_by_listings <- review_tokens_by_listings %>% count(listing_id, word, sort = TRUE)
+get_rating <- review_data_en %>% dplyr::select(., c(2, 3)) %>% distinct(listing_id, review_scores_rating)
+review_tokens_by_listings <- review_tokens_by_listings %>% left_join(get_rating)
+total_words <- review_tokens_by_listings %>% 
+                group_by(word) %>% 
+                 dplyr::summarize(total = sum(n))
+review_tokens_by_listings <- review_tokens_by_listings %>% left_join(total_words)
+
+#Calculating tf_idf of the tokens
+review_tf_idf_by_listings <- review_tokens_by_listings %>% count(listing_id, word) %>%
+                             bind_tf_idf(word,listing_id,n) %>% group_by(word) %>% arrange(desc(tf-idf))
+
+#Checking the tf-idf distribution
+hist(review_tf_idf_by_listings$tf_idf,breaks = 200,main="TF-IDF plot")
+
+#Taking the cut-off value from histogram
+review_tf_idf_by_listings <- review_tf_idf_by_listings %>% 
+                             filter(tf_idf < 0.6)
+hist(review_tf_idf_by_listings$tf_idf,breaks = 400,main="TF-IDF plot")
+
+review_tf_idf_by_listings <- review_tf_idf_by_listings %>% 
+                             filter(tf_idf < 0.5)
+hist(review_tf_idf_by_listings$tf_idf,breaks = 400,main="TF-IDF plot")
+
+review_tf_idf_by_listings <- review_tf_idf_by_listings %>% 
+                             filter(tf_idf > 0.05)
+hist(review_tf_idf_by_listings$tf_idf,breaks = 400,main="TF-IDF plot")
+
+review_tf_idf_by_listings %>% group_by(word) %>%
+                              summarise(total =n()) %>%
+                              arrange(desc(total)) %>%
+                              top_n(50)
+
+saveRDS(review_tf_idf_by_listings, "review_tf_idf_by_listings.rds")
+```
+
+#Checking distribution
+```{r}
+all_reviews_listings <- readRDS("all_reviews_listings.rds")
+
+all_reviews_listings %>% gather(Attributes, value, c(14,15,21,23,24,26:39)) %>%
+  ggplot(aes(value, fill = Attributes)) + 
+  geom_histogram(color = "black", show.legend = FALSE) +
+  facet_wrap(~Attributes, scales = "free_x") + 
+  labs(x = "Values", y = "Frequency", title = "Airbnb Metadata - Histograms")
+  theme_bw()
+
+#Distribution of reviews
+ggplot(all_reviews_listings, aes(date, number_of_reviews_ltm)) + 
+             geom_col() +
+             geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") +
+             labs(x = "Number of reviews", y = "Count", title = "Distribution of number of reviews listings have in last 30 days")
+
+#Distribution of reviews by country
+ggplot(all_reviews_listings, aes(date, number_of_reviews_ltm, fill = country)) + 
+             geom_col() +
+             geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") +
+             labs(x = "Number of reviews", y = "Count", title = "Distribution of number of reviews listings have in last 30 days by Country") +
+             facet_grid(country~.)
+
+#Distribution of superhosts
+grid.arrange(ggplot(all_reviews_listings, aes(host_is_superhost)) + 
+             geom_bar() +
+             labs(x = "Superhost", y = "Count", title = "Number of Superhosts") +
+             facet_wrap(~period),
+
+#Distributions of room types
+             ggplot(all_reviews_listings, aes(room_type)) + 
+             geom_bar() +
+             labs(x = "Room Type", y = "Count", title = "Count of Room types"),
+
+#Distributions of instantly bookable listings
+             ggplot(all_reviews_listings, aes(instant_bookable)) + 
+             geom_bar() +
+             labs(x = "Instant Bookable", y = "Count", title = "Count of Instantly Bookable Listings") +
+             facet_wrap(~period),
+             ggplot(all_reviews_listings, aes(period)) + 
+             geom_bar() +
+             labs(x = "Period", y = "Count", title = "Count of review from each period")
+)
+```
+
+* Checking for correlation between rating accuracy and review lengths
+```{r}
+#Finding the review lengths
+corr_data_1 <- all_reviews_listings %>%
+               mutate(review_length = str_count(comments)) %>%
+               group_by(listing_id) %>%
+               mutate(average_review_length = mean(review_length),
+                      mean_rating = mean(review_scores_rating),
+                      mean_cleanliness = mean(review_scores_cleanliness),
+                      mean_accuracy = mean(review_scores_accuracy),
+                      mean_checkin = mean(review_scores_checkin),
+                      mean_communication = mean(review_scores_communication),
+                      mean_location = mean(review_scores_location),
+                      mean_value = mean(review_scores_value)) %>%
+               ungroup()
+
+#Plotting
+grid.arrange((corr_data_1 %>% ggplot(aes(x=average_review_length,
+                           y=mean_rating)) +
+                geom_point(alpha=0.2) +
+                geom_smooth(method="lm") +
+                ggtitle("Rating scores vs length of reviews")),
+
+(corr_data_1 %>% ggplot(aes(x=average_review_length,
+                           y=mean_cleanliness)) +
+                geom_point(alpha=0.2) +
+                geom_smooth(method="lm") +
+                ggtitle("Cleanliness scores vs length of reviews")),
+
+(corr_data_1 %>% ggplot(aes(x=average_review_length,
+                           y=mean_accuracy)) +
+                geom_point(alpha=0.2) +
+                geom_smooth(method="lm") +
+                ggtitle("Accuracy scores vs length of reviews")),
+
+(corr_data_1 %>% ggplot(aes(x=average_review_length,
+                           y=mean_checkin)) +
+                geom_point(alpha=0.2) +
+                geom_smooth(method="lm") +
+                ggtitle("Checkin scores vs length of reviews")),
+
+(corr_data_1 %>% ggplot(aes(x=average_review_length,
+                           y=mean_communication)) +
+                geom_point(alpha=0.2) +
+                geom_smooth(method="lm") +
+                ggtitle("Communication scores vs length of reviews")),
+
+(corr_data_1 %>% ggplot(aes(x=average_review_length,
+                           y=mean_location)) +
+                geom_point(alpha=0.2) +
+                geom_smooth(method="lm") +
+                ggtitle("Location scores vs length of reviews")),
+
+(corr_data_1 %>% ggplot(aes(x=average_review_length,
+                           y=mean_value)) +
+                geom_point(alpha=0.2) +
+                geom_smooth(method="lm") +
+                ggtitle("Rating value scores vs length of reviews")))
+```
+
+# Correlation between ratings and country (review)
+```{r}
+countries <- all_reviews_listings %>%
+                  mutate(country = as.factor(country)) %>%
+                  group_by(date, country) %>%
+                  summarise(mean_rating = mean(review_scores_rating),
+                            frequency = n())
+#Plotting 
+countries %>% ggplot(aes(x = date,
+                              y = mean_rating, fill = country)) +
+              geom_jitter() + geom_line() + geom_smooth() + facet_wrap(~country) +
+              ggtitle("Rating scores vs Country of Reviewer") +
+              geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") +
+              theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+#Creating linear model
+by_country.lm <- lm(review_scores_rating ~ period, all_reviews_listings)
+
+#Extracting means and 95% confidence intervals
+by_country.emm <- emmeans(by_country.lm, ~period)
+kable(by_country.emm, caption = "Mean scores and 95% CIs ")
+
+#Estimating the differences between means
+by_country.constrast <- confint(pairs(by_country.emm, reverse = TRUE))
+kable(by_country.constrast, caption = "Differences between the mean scores before and after the pandemic")
+
+#Visualizing the estimations
+avg.entire_homes <- grid.arrange(
+                 ggplot(summary(by_country.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Ratings", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="Ratings before and after the pandemic"),
+                 
+                 ggplot(by_country.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Ratings", 
+                        subtitle="Error bars are 95% CIs", title="Ratings before and after the pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+
+```
+
+# Observing ratings for room types over the years
+```{r}
+by_room_type <- all_reviews_listings %>%
+                  group_by(room_type, date) %>%
+                  summarise(mean_rating = mean(review_scores_rating))
+
+#Plotting
+ggplot(by_room_type, aes(date, mean_rating)) + 
+             geom_point() + geom_smooth(method = lm) + facet_wrap(~room_type) +
+             geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") +
+             labs(x = "Year", y = "Rating", title = "Distribution of ratings by room types over the years")
+```
+
+#Contrasting ratings by period for entire homes
+```{r}
+entire_homes <- all_reviews_listings %>% filter(room_type == "Entire home/apt")
+
+#Creating linear model
+entire_homes.lm <- lm(review_scores_rating ~ period, entire_homes)
+
+#Extracting means and 95% confidence intervals
+entire_homes.emm <- emmeans(entire_homes.lm, ~period)
+kable(entire_homes.emm, caption = "Mean scores and 95% CIs ")
+
+#Estimating the differences between means
+entire_homes.constrast <- confint(pairs(entire_homes.emm, reverse = TRUE))
+kable(entire_homes.constrast, caption = "Differences between the mean scores before and after the pandemic")
+
+#Visualizing the estimations
+avg.entire_homes <- grid.arrange(
+                 ggplot(summary(entire_homes.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Ratings", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="Ratings for Entire home/apt before and after the pandemic"),
+                 
+                 ggplot(entire_homes.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Ratings", 
+                        subtitle="Error bars are 95% CIs", title="Ratings for Entire home/apt before and after the pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+```
+
+#Contrasting ratings by period for private room
+```{r}
+private <- all_reviews_listings %>% filter(room_type == "Private room")
+
+#Creating linear model
+private.lm <- lm(review_scores_rating ~ period, private)
+
+#Extracting means and 95% confidence intervals
+private.emm <- emmeans(private.lm, ~period)
+kable(private.emm, caption = "Mean scores and 95% CIs ")
+
+#Estimating the differences between means
+private.constrast <- confint(pairs(private.emm, reverse = TRUE))
+kable(private.constrast, caption = "Differences between the mean scores before and after the pandemic")
+
+#Visualizing the estimations
+avg.private <- grid.arrange(
+                 ggplot(summary(private.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Ratings", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="Ratings for Private rooms before and after the pandemic"),
+                 
+                 ggplot(private.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Ratings", 
+                        subtitle="Error bars are 95% CIs", title="Ratings for Private rooms before and after the pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+```
+
+#Contrasting ratings by period for hotels
+```{r}
+hotel <- all_reviews_listings %>% filter(room_type == "Hotel room")
+
+#Creating linear model
+hotel.lm <- lm(review_scores_rating ~ period, hotel)
+
+#Extracting means and 95% confidence intervals
+hotel.emm <- emmeans(hotel.lm, ~period)
+kable(hotel.emm, caption = "Mean scores and 95% CIs ")
+
+#Estimating the differences between means
+hotel.constrast <- confint(pairs(hotel.emm, reverse = TRUE))
+kable(hotel.constrast, caption = "Differences between the mean scores before and after the pandemic")
+
+#Visualizing the estimations
+avg.hotel <- grid.arrange(
+                 ggplot(summary(hotel.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Ratings", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="Ratings for Hotel rooms before and after the pandemic"),
+                 
+                 ggplot(hotel.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Ratings", 
+                        subtitle="Error bars are 95% CIs", title="Ratings for Hotel rooms before and after the pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+```
+
+#Contrasting ratings by period for shared rooms
+```{r}
+shared <- all_reviews_listings %>% filter(room_type == "Shared room")
+
+#Creating linear model
+shared.lm <- lm(review_scores_rating ~ period, shared)
+
+#Extracting means and 95% confidence intervals
+shared.emm <- emmeans(shared.lm, ~period)
+kable(shared.emm, caption = "Mean scores and 95% CIs ")
+
+#Estimating the differences between means
+shared.constrast <- confint(pairs(shared.emm, reverse = TRUE))
+kable(shared.constrast, caption = "Differences between the mean scores before and after the pandemic")
+
+#Visualizing the estimations
+avg.shared <- grid.arrange(
+                 ggplot(summary(shared.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Ratings", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="Ratings for Shared rooms before and after the pandemic"),
+                 
+                 ggplot(shared.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Ratings", 
+                        subtitle="Error bars are 95% CIs", title="Ratings for Shared rooms before and after the pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+```
+
+# All room type estimation contrasts
+```{r}
+grid.arrange(avg.entire_homes, avg.hotel, avg.private, avg.shared, nrow = 4)
+```
+
+# Checking for difference in minimum_nights before and after pandemic
+```{r}
+#Creating linear model
+nights.lm <- lm(minimum_nights ~ period, all_reviews_listings)
+
+#Extracting means and 95% confidence intervals
+nights.emm <- emmeans(nights.lm, ~period)
+kable(nights.emm, caption = "Mean scores and 95% CIs ")
+
+#Estimating the differences between means
+nights.constrast <- confint(pairs(nights.emm, reverse = TRUE))
+kable(nights.constrast, caption = "Differences between the mean scores before the pandemic")
+
+#Visualizing the estimations
+avg.nights <- grid.arrange(
+                 ggplot(summary(nights.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Minimum Nights", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="Minimum nights before and after the pandemic"),
+                 
+                 ggplot(nights.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Minimum Nights", 
+                        subtitle="Error bars are 95% CIs", title="Minimum nights before and after the pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+```
+
+# Checking for correlation between ratings and minimum nights
+```{r}
+#Creating a base model
+base.lm <- lm(review_scores_rating ~ period, all_reviews_listings)
+
+#Building a regression for minimum nights by periods
+base.nights.lm <- lm(review_scores_rating ~ period + minimum_nights, all_reviews_listings)
+
+#Checking for better model
+anova(base.lm, base.nights.lm)
+```
+
+# Checking for difference in price before and after pandemic
+```{r}
+#Creating linear model
+price.lm <- lm(price ~ period, all_reviews_listings)
+
+#Extracting means and 95% confidence intervals
+price.emm <- emmeans(price.lm, ~period)
+kable(price.emm, caption = "Mean scores and 95% CIs ")
+
+#Estimating the differences between means
+price.constrast <- confint(pairs(price.emm, reverse = TRUE))
+kable(price.constrast, caption = "Differences between the price before and after the pandemic")
+
+#Visualizing the estimations
+avg.price <- grid.arrange(
+                 ggplot(summary(price.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Price", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="Average Price before and after the pandemic"),
+                 
+                 ggplot(price.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Price", 
+                        subtitle="Error bars are 95% CIs", title="Price before and after the pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+```
+
+# Checking for difference in availability before and after pandemic
+```{r}
+#Creating linear model
+availability.lm <- lm(availability_90 ~ period, all_reviews_listings)
+
+#Extracting means and 95% confidence intervals
+availability.emm <- emmeans(availability.lm, ~period)
+kable(availability.emm, caption = "Mean scores and 95% CIs ")
+
+#Estimating the differences between means
+availability.constrast <- confint(pairs(availability.emm, reverse = TRUE))
+kable(availability.constrast, caption = "Differences between the mean scores before the pandemic")
+
+#Visualizing the estimations
+avg.availability <- grid.arrange(
+                 ggplot(summary(availability.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Availability for 90 days", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="90 days availability before and after the pandemic"),
+                 
+                 ggplot(availability.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Availability", 
+                        subtitle="Error bars are 95% CIs", title="Availability before and after the pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+
+#Building a regression model for available listings
+base.availability.lm <- lm(review_scores_rating ~ period + availability_90, all_reviews_listings)
+
+#Checking for better model
+anova(base.lm, base.availability.lm)
+```
+
+# Checking for difference in number of listings before and after pandemic
+```{r}
+#Creating linear model
+listing.lm <- lm(host_listings_count ~ period, all_reviews_listings)
+
+#Extracting means and 95% confidence intervals
+listing.emm <- emmeans(listing.lm, ~period)
+kable(listing.emm, caption = "Mean scores and 95% CIs ")
+
+#Estimating the differences between means
+listing.constrast <- confint(pairs(listing.emm, reverse = TRUE))
+kable(listing.constrast, caption = "Differences between the number of listings of a host before and after pandemic")
+
+#Visualizing the estimations
+avg.super <- grid.arrange(
+                 ggplot(summary(listing.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Number of Listings by hosts", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="Number of listings of hosts before and after pandemic"),
+                 
+                 ggplot(listing.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Number of Listings by hosts", 
+                        subtitle="Error bars are 95% CIs", title="Number of listings of hosts before and after pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+```
+
+# Top words by year
+```{r}
+years <- review_data_en %>% merge(all_reviews_listings[,c("row", "year")], by = "row") %>%
+  dplyr::select(listing_id,year) %>%
+  unique(.) %>% 
+  group_by(year) %>% 
+  summarise(total =n()) %>% 
+  arrange(desc(total))
+
+tokenized_year <- review_data_en %>% merge(all_reviews_listings[,c("row", "year")], by = "row") %>% 
+  dplyr::select(listing_id,year) %>% 
+  filter(year %in% years$year) %>% 
+  unique(.)
+
+year_tokens <- review_tf_idf_by_listings %>% 
+  right_join(tokenized_year) %>% group_by(year,word) %>% 
+  summarise(total=sum(n)) %>% 
+  arrange(desc(total)) 
+
+output_year <- data.frame()
+for(yearss in 1:nrow(years)){
+  print(paste0("For year: ",years$year[yearss]))
+  
+  output1 <- year_tokens %>% ungroup() %>% filter(year == years$year[yearss]) %>% top_n(15,total) %>% dplyr::select(-total) %>% mutate(rank = row_number())
+  output_year <- rbind(output_year, output1)
+}
+
+output_year %>%    ggplot(aes(fct_reorder(word, rank), rank, fill = year)) +
+                   geom_col(show.legend = FALSE) +
+                   facet_wrap(~ year, ncol = 5, scales = "free") +
+                   labs(title="Top 10 words by Years",
+                   y = "Term",
+                   x = "Rank") +
+                   coord_flip() +
+                   theme(plot.title = element_text(hjust = 0.5)) 
+```
+
+# Top_words by neighbourhood
+```{r} 
+cities <- review_data_en %>% 
+  dplyr::select(listing_id, city) %>%
+  unique(.) %>% 
+  group_by(city) %>% 
+  summarise(total =n()) %>% 
+  arrange(desc(total)) %>%
+  top_n(10)
+
+tokenized_city <- review_data_en %>%
+  dplyr::select(listing_id,city) %>% 
+  filter(city %in% cities$city) %>% 
+  unique(.)
+
+city_tokens <- review_tf_idf_by_listings %>% 
+  right_join(tokenized_city) %>% group_by(city,word) %>% 
+  summarise(total=sum(n)) %>% 
+  arrange(desc(total)) 
+
+output_city <- data.frame()
+for(citiess in 1:nrow(cities)){
+  print(paste0("For city: ",cities$city[citiess]))
+  
+  output <- city_tokens %>% ungroup() %>% filter(city == cities$city[citiess]) %>% top_n(10,total) %>% dplyr::select(-total) %>% mutate(rank = row_number())
+  output_city <- rbind(output_city, output)
+}
+
+output_city %>% group_by(city) %>%
+                   slice_max(rank, n = 10) %>%
+                   ungroup() %>%
+                   ggplot(aes(rank, fct_reorder(word, rank), fill = city)) +
+                   geom_col(show.legend = FALSE) +
+                   facet_wrap(~ city, ncol = 5, scales = "free") +
+                   labs(title="Top 10 words by City",
+                   y = "Term",
+                   x = "Rank") +
+                   theme(plot.title = element_text(hjust = 0.5))
+```
+
+# Top words by periods
+```{r} 
+periods <- review_data_en %>% 
+  dplyr::select(listing_id, period) %>%
+  unique(.) %>% 
+  group_by(period) %>% 
+  summarise(total =n()) %>% 
+  arrange(desc(total)) %>%
+  top_n(10)
+
+tokenized_period <- review_data_en %>%
+  dplyr::select(listing_id,period) %>% 
+  filter(period %in% periods$period) %>% 
+  unique(.)
+
+period_tokens <- review_tf_idf_by_listings %>% 
+  right_join(tokenized_period) %>% group_by(period,word) %>% 
+  summarise(total=sum(n)) %>% 
+  arrange(desc(total)) 
+
+output_period <- data.frame()
+for(periodss in 1:nrow(periods)){
+  print(paste0("For period: ",periods$period[periodss]))
+  
+  output <- period_tokens %>% ungroup() %>% filter(period == periods$period[periodss]) %>% top_n(10,total) %>% dplyr::select(-total) %>% mutate(rank = row_number())
+  output_period <- rbind(output_period, output)
+}
+
+output_period %>% group_by(period) %>%
+                   slice_max(rank, n = 10) %>%
+                   ungroup() %>%
+                   ggplot(aes(rank, fct_reorder(word, rank), fill = period)) +
+                   geom_col(show.legend = FALSE) +
+                   facet_wrap(~ period, ncol = 5, scales = "free") +
+                   labs(title="Top 10 words by Period",
+                   y = "Term",
+                   x = "Rank") +
+                   theme(plot.title = element_text(hjust = 0.5))
+```
+
+# Sentiment Analysis
+
+
+# Ingest
+
+* Dataset preparation
+
+We will use the prepared dataset from the previous section.
+
+```{r}
+#Importing the dataset
+review_data_en <- readRDS("review_data_en.rds")
+review_data_by_listings <- readRDS("review_data_by_listings.rds")
+all_reviews_listings <- readRDS("all_reviews_listings.rds")
+all_calendars <- readRDS("all_calendars.rds")
+```
+
+# Listing level dataset
+```{r}
+#Getting the english reviews along with metadata
+get_rows <- review_data_en %>% select(row, listing_id) %>% unique(.)
+all_reviews_listings <- all_reviews_listings %>% filter(row %in% get_rows$row)
+
+#Grouping the reviews by listing and period
+dataset <- review_data_by_listings %>% left_join(all_reviews_listings, by = c("listing_id", "month_year"))
+dataset <- dataset %>% group_by(listing_id, month_year) %>% summarise(grouped_reviews = grouped_reviews,
+                                                                      review_scores_rating = mean(review_scores_rating),
+                                                                      price = mean(price),
+                                                                      period = period,
+                                                                      city = city) %>% ungroup()
+dataset <- dplyr::distinct(dataset)
+
+#Setting the correct datatypes
+dataset$review_scores_rating <- as.numeric(dataset$review_scores_rating)
+dataset$price <- as.numeric(dataset$price)
+dataset <- na.omit(dataset)
+
+#Converting listing_id to integer
+dataset <- dataset %>% separate(listing_id, into = c("listing_id", "s"), sep = "_")
+dataset$s <- NULL
+dataset <- dataset[, c(1,3,2,4,5,6,7)]
+```
+
+# Review level dataset
+```{r}
+dataset_review <- review_data_en  
+
+dataset_review <- dataset_review %>% merge(all_reviews_listings[, c("row", "price")], by = "row")
+dataset_review$review_scores_rating <- as.numeric(dataset_review$review_scores_rating)
+dataset_review$price <- as.numeric(dataset_review$price)
+dataset_review <- distinct(dataset_review)
+dataset_review <- na.omit(dataset_review)
+dataset_review <- dataset_review %>% separate(listing_id, c("listing_id", "s"), sep = "_")
+dataset_review$s <- NULL
+```
+
+# Test dataset
+```{r}
+test_data <- readRDS("test_data_en.rds")
+
+test_data$review_scores_rating <- as.numeric(test_data$review_scores_rating)
+test_data$price <- as.numeric(test_data$price)
+test_data <- distinct(test_data)
+test_data <- na.omit(test_data)
+test_data <- test_data %>% separate(listing_id, c("listing_id", "s"), sep = "_")
+test_data$s <- NULL
+```
+
+# Process
+
+* Text cleaning
+
+Applying some additional text cleaning relevant for the analysis of this section.
+```{r}
+#Getting sample reviews to understand the required cleaning
+#review_data_by_listings$grouped_reviews %>% sample(100) %>% check_text(.)
+
+#Cleaning the grouped reviews
+dataset$grouped_reviews <- replace_emoticon(dataset$grouped_reviews) #convert emoticons to words
+dataset$grouped_reviews <- replace_emoji(dataset$grouped_reviews) #convert emojis to words
+dataset$grouped_reviews <- replace_incomplete(dataset$grouped_reviews) #dealing with incomplete sentences
+dataset$grouped_reviews <- add_missing_endmark(dataset$grouped_reviews) #putting required endmarks
+dataset$grouped_reviews <- textshape::split_sentence(dataset$grouped_reviews)
+dataset$grouped_reviews <- replace_non_ascii(dataset$grouped_reviews) #replacing common non-ascii words
+dataset$grouped_reviews <- gsub("[ |\t]+", " ", dataset$grouped_reviews) #removing white space
+
+#Cleaning the reviews
+dataset_review$comments <- replace_emoticon(dataset_review$comments) #convert emoticons to words
+dataset_review$comments <- replace_emoji(dataset_review$comments) #convert emojis to words
+dataset_review$comments <- replace_incomplete(dataset_review$comments) #dealing with incomplete sentences
+dataset_review$comments <- add_missing_endmark(dataset_review$comments) #putting required endmarks
+dataset_review$comments <- textshape::split_sentence(dataset_review$comments)
+dataset_review$comments <- replace_non_ascii(dataset_review$comments) #replacing common non-ascii words
+dataset_review$comments <- gsub("[ |\t]+", " ", dataset_review$comments) #removing white space
+
+#Cleaning the test data
+test_data$comments <- replace_emoticon(test_data$comments) #convert emoticons to words
+test_data$comments <- replace_emoji(test_data$comments) #convert emojis to words
+test_data$comments <- replace_incomplete(test_data$comments) #dealing with incomplete sentences
+test_data$comments <- add_missing_endmark(test_data$comments) #putting required endmarks
+test_data$comments <- textshape::split_sentence(test_data$comments)
+test_data$comments <- replace_non_ascii(test_data$comments) #replacing common non-ascii words
+test_data$comments <- gsub("[ |\t]+", " ", test_data$comments) #removing white space
+
+#saveRDS(dataset, "dataset.rds")
+#saveRDS(dataset_review, "dataset_review.rds")
+#saveRDS(test_data, "test_data_cleaned.rds")
+```
+
+```{r}
+#Getting all datasets
+dataset <- readRDS("dataset.rds")
+dataset_review <- readRDS("dataset_review.rds")
+test_data <- readRDS("test_data_cleaned.rds")
+
+#Segregating dataset by periods
+dataset_review_pre <- dataset_review %>% filter(period == "Before Pandemic")
+dataset_review_post <- dataset_review %>% filter(period == "After Pandemic")
+```
+
+* Getting the tokenized reviews
+```{r}
+#Creating custom stop words based on frequent words
+custom_words <- c("airbnb", "br", "london", "tongue", "stay", "location", "host", "apartment", "flat", "home", "restaurants", "city")
+
+#Binding them with the default stop word dictionary
+tibble(word = custom_words,lexicon = rep("custom",length(custom_words))) %>% bind_rows(stop_words) -> custom_stopwords
+
+#Tokenizing the reviews at listing level
+tokens_all <- dataset %>% 
+              unnest_tokens(word,grouped_reviews) %>% 
+              count(word,listing_id) %>% 
+              anti_join(custom_stopwords) 
+
+count_listing <- tokens_all %>% group_by(listing_id) %>% dplyr::summarise(wordcount = n()) 
+tokens_all <- tokens_all %>% left_join(count_listing) 
+
+#Tokenizing the reviews at review level
+tokens_all_review <- dataset_review %>% 
+                     unnest_tokens(word,comments) %>% 
+                     count(word,row) %>% 
+                     anti_join(custom_stopwords)
+
+count_review <- tokens_all_review %>% group_by(row) %>% dplyr::summarise(wordcount = n()) 
+tokens_all_review <- tokens_all_review %>% left_join(count_review) 
+
+#Tokenizing the test data reviews
+test_data <- test_data %>% ungroup() %>%
+ unnest_tokens(word,grouped_reviews) %>%
+ group_by(listing_id, month_year) %>%
+ summarise(grouped_reviews = paste(word,collapse = " "))
+
+tokens_all_test <- test_data %>%
+                   unnest_tokens(word,grouped_reviews) %>%
+                   count(word, listing_id) %>%
+                   anti_join(custom_stopwords)
+
+count_test <- tokens_all_test %>% group_by(listing_id) %>% dplyr::summarise(wordcount = n()) 
+tokens_all_test <- tokens_all_test %>% left_join(count_test) 
+
+
+#Finding the token lengths at listing level
+tokens_all$token_length <- nchar(tokens_all$word)
+
+#Checking the distribution of the lengths
+view(tokens_all %>% group_by(token_length) %>% dplyr::summarise(total =n()))
+
+#Removing the short tokens
+tokens_all <- tokens_all %>% filter(token_length > 2)
+
+#Checking the longest tokens
+view(tokens_all %>% group_by(token_length) %>% dplyr::summarise(total =n()) %>% arrange(desc(token_length)))
+
+#Removing excessively long tokens
+tokens_all <- tokens_all %>% filter(token_length<=15)
+
+tokens_all_tf_idf <- tokens_all %>% 
+  bind_tf_idf(word,listing_id,n)
+
+hist(tokens_all_tf_idf$tf_idf,breaks = 200,main="TF-IDF plot")
+
+tokens_all_tf_idf <- tokens_all_tf_idf %>% 
+  filter(tf_idf<0.6)
+
+hist(tokens_all_tf_idf$tf_idf,breaks = 200,main="TF-IDF plot")
+
+tokens_all_tf_idf <- tokens_all_tf_idf %>% 
+  filter(tf_idf>0.05)
+
+hist(tokens_all_tf_idf$tf_idf,breaks = 200,main="TF-IDF plot")
+
+
+#Finding the token lengths for reviews
+tokens_all_review$token_length <- nchar(tokens_all_review$word)
+
+#Checking the distribution of the lengths
+view(tokens_all_review %>% group_by(token_length) %>% dplyr::summarise(total =n()))
+
+#Removing the short tokens
+tokens_all_review <- tokens_all_review %>% filter(token_length > 2)
+
+#Checking the longest tokens
+view(tokens_all_review %>% group_by(token_length) %>% dplyr::summarise(total =n()) %>% arrange(desc(token_length)))
+
+#Removing excessively long tokens
+tokens_all_review <- tokens_all_review %>% filter(token_length<=15)
+
+tokens_all_review_tf_idf <- tokens_all_review %>% 
+  bind_tf_idf(word,row,n)
+
+hist(tokens_all_review_tf_idf$tf_idf,breaks = 200,main="TF-IDF plot")
+
+tokens_all_review_tf_idf <- tokens_all_review_tf_idf %>% 
+  filter(tf_idf<1)
+
+hist(tokens_all_review_tf_idf$tf_idf,breaks = 200,main="TF-IDF plot")
+
+tokens_all_review_tf_idf <- tokens_all_review_tf_idf %>% 
+  filter(tf_idf>0.1)
+
+hist(tokens_all_review_tf_idf$tf_idf,breaks = 200,main="TF-IDF plot")
+
+
+#Finding the token lengths for test data
+tokens_all_test$token_length <- nchar(tokens_all_test$word)
+
+#Checking the distribution of the lengths
+view(tokens_all_test %>% group_by(token_length) %>% dplyr::summarise(total =n()))
+
+#Removing the short tokens
+tokens_all_test <- tokens_all_test %>% filter(token_length > 2)
+
+#Checking the longest tokens
+view(tokens_all_test %>% group_by(token_length) %>% dplyr::summarise(total =n()) %>% arrange(desc(token_length)))
+
+#Removing excessively long tokens
+tokens_all_test <- tokens_all_test %>% filter(token_length<=15)
+
+tokens_all_test_tf_idf <- tokens_all_test %>% 
+  bind_tf_idf(word,listing_id,n)
+
+hist(tokens_all_test_tf_idf$tf_idf,breaks = 200,main="TF-IDF plot")
+
+tokens_all_test_tf_idf <- tokens_all_test_tf_idf %>% 
+  filter(tf_idf<0.6)
+
+hist(tokens_all_test_tf_idf$tf_idf,breaks = 200,main="TF-IDF plot")
+
+tokens_all_test_tf_idf <- tokens_all_test_tf_idf %>% 
+  filter(tf_idf>0.05)
+
+hist(tokens_all_test_tf_idf$tf_idf,breaks = 200,main="TF-IDF plot")
+
+
+#Creating backups
+#saveRDS(tokens_all_tf_idf, "tokens_all.rds")
+#saveRDS(tokens_all_review_tf_idf, "tokens_all_review.rds")
+#saveRDS(tokens_all_test_tf_idf, "tokens_all_test.rds")
+tokens_all <- readRDS("tokens_all.rds")
+tokens_all_review <- readRDS("tokens_all_review.rds")
+tokens_all_test <- readRDS("tokens_all_test.rds")
+```
+
+* Finding the features to extract
+```{r}
+#Getting the average ratings for each store for rating categorizing
+rating_categories <- dataset %>%
+                     group_by(listing_id) %>% 
+                     dplyr::summarise(avg_rating = mean(review_scores_rating)) %>%
+                     ungroup()
+
+#Finding the levels to aggregate the words 
+quantile(rating_categories$avg_rating)
+
+#Assigning ratings to two categories
+rating_categories$rating_category <- ifelse(rating_categories$avg_rating <= 3, 1, 2)
+
+ratings_categories_tokens <- tokens_all %>% left_join(rating_categories) %>% 
+  group_by(rating_category,word) %>% dplyr::summarise(total =sum(n))
+  
+#Looking at potential features to extract
+kable(ratings_categories_tokens %>% filter(rating_category == 1) %>% arrange(desc(total)) %>% top_n(10))
+
+kable(ratings_categories_tokens %>% filter(rating_category == 2) %>% arrange(desc(total)) %>% top_n(10))
+```
+
+# Feature Extraction Overall
+```{r}
+reviews_for_feature <- dataset_review %>% dplyr::select(row, comments, review_scores_rating, price)
+reviews_for_feature$comments <- tolower(reviews_for_feature$comments)
+
+#Finding reviews that contain "recommend"
+reviews_for_feature %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "recommend"))) %>%
+ mutate(recommend=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,recommend) -> recommend_feature
+
+recommend_feature_final <- recommend_feature %>%
+ inner_join(dataset_review) %>%
+ dplyr::select(row, review_scores_rating, recommend)
+model_recommend <- polr(factor(review_scores_rating) ~ recommend, data=recommend_feature_final, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "location"
+reviews_for_feature %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "location"))) %>%
+ mutate(location=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,location) -> location_feature
+
+location_feature_final <- location_feature %>%
+ inner_join(dataset_review) %>%
+ dplyr::select(row, review_scores_rating, location)
+model_location <- polr(factor(review_scores_rating) ~ location, data=location_feature_final, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "price"
+reviews_for_feature %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "price"))) %>%
+ mutate(price_feature=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,price_feature) -> price_feature
+
+price_feature_final <- price_feature %>%
+ inner_join(dataset_review) %>%
+ dplyr::select(row, review_scores_rating, price_feature)
+model_price <- polr(factor(review_scores_rating) ~ price_feature, data=price_feature_final, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "stay"
+reviews_for_feature %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "stay"))) %>%
+ mutate(stay=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,stay) -> stay_feature
+
+stay_feature_final <- stay_feature %>%
+ inner_join(dataset_review) %>%
+ dplyr::select(row, review_scores_rating, stay)
+model_stay <- polr(factor(review_scores_rating) ~ stay, data=stay_feature_final, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "host"
+reviews_for_feature %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "host"))) %>%
+ mutate(host=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,host) -> host_feature
+
+host_feature_final <- host_feature %>%
+ inner_join(dataset_review) %>%
+ dplyr::select(row, review_scores_rating, host)
+model_host <- polr(factor(review_scores_rating) ~ host, data=host_feature_final, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "clean"
+reviews_for_feature %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "clean"))) %>%
+ mutate(clean=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,clean) -> clean_feature
+
+clean_feature_final <- clean_feature %>%
+ inner_join(dataset_review) %>%
+ dplyr::select(row, review_scores_rating, clean)
+model_clean <- polr(factor(review_scores_rating) ~ clean, data=clean_feature_final, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "communication"
+reviews_for_feature %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "communication"))) %>%
+ mutate(communication=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,communication) -> communication_feature
+
+communication_feature_final <- communication_feature %>%
+ inner_join(dataset_review) %>%
+ dplyr::select(row, review_scores_rating, communication)
+model_communication <- polr(factor(review_scores_rating) ~ communication, data=communication_feature_final, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "availability"
+reviews_for_feature %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "availability"))) %>%
+ mutate(availability=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,availability) -> availability_feature
+
+availability_feature_final <- availability_feature %>%
+ inner_join(dataset_review) %>%
+ dplyr::select(row, review_scores_rating, availability)
+model_availability <- polr(factor(review_scores_rating) ~ availability, data=availability_feature_final, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "check"
+reviews_for_feature %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "check"))) %>%
+ mutate(check=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,check) -> check_feature
+
+check_feature_final <- check_feature %>%
+ inner_join(dataset_review) %>%
+ dplyr::select(row, review_scores_rating, check)
+model_check <- polr(factor(review_scores_rating) ~ check, data=check_feature_final, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "easy"
+reviews_for_feature %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "easy"))) %>%
+ mutate(easy=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,easy) -> easy_feature
+
+easy_feature_final <- easy_feature %>%
+ inner_join(dataset_review) %>%
+ dplyr::select(row, review_scores_rating, easy)
+model_easy <- polr(factor(review_scores_rating) ~ easy, data=easy_feature_final, Hess=TRUE, method = c("logistic"))
+
+#Comparing all the feature models
+stargazer::stargazer(model_recommend, model_location, model_price, model_stay, model_host, model_clean, model_communication, model_availability, model_check, model_easy,
+                     type = "text", add.lines = list(c("AIC", round(AIC(model_recommend),1),
+                                                              round(AIC(model_location),1),
+                                                              round(AIC(model_price),1),
+                                                              round(AIC(model_stay),1),
+                                                              round(AIC(model_host),1),
+                                                              round(AIC(model_clean),1),
+                                                              round(AIC(model_communication),1),
+                                                              round(AIC(model_availability),1),
+                                                              round(AIC(model_check),1),
+                                                              round(AIC(model_easy),1))),
+                     out = "features.txt", single.row = T, align = T, flip = T)
+```
+
+```{r}
+#Combining all features into a data.frame
+review_feature_final_rating <- reviews_for_feature %>%
+                               left_join(recommend_feature) %>%
+                               left_join(location_feature) %>%
+                               left_join(price_feature) %>%
+                               left_join(stay_feature) %>%
+                               left_join(host_feature) %>%
+                               left_join(clean_feature) %>%
+                               left_join(communication_feature) %>%
+                               left_join(availability_feature) %>%
+                               left_join(check_feature) %>%
+                               left_join(easy_feature)
+
+#Creating a backup
+#saveRDS(review_feature_final_rating,"review_feature_final_rating.rds")
+review_feature_final_rating <- readRDS("review_feature_final_rating.rds")
+
+#Conducting regression with all the features
+regress_all_features_rating <- review_feature_final_rating %>% dplyr::select(,-c(row, comments, price))
+model_features_all_rating <- polr(factor(review_scores_rating) ~ ., data = regress_all_features_rating)
+stargazer::stargazer(model_features_all_rating, type = "text", out = "feature.txt", single.row = T, align = T, flip = T)
+```
+
+# Feature Extraction Pre-Pandemic
+```{r}
+reviews_for_feature_pre <- dataset_review_pre %>% dplyr::select(row, comments, review_scores_rating, price)
+reviews_for_feature_pre$comments <- tolower(reviews_for_feature_pre$comments)
+
+#Finding reviews that contain "recommend"
+reviews_for_feature_pre %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "recommend"))) %>%
+ mutate(recommend=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,recommend) -> recommend_feature_pre
+
+recommend_feature_final_pre <- recommend_feature_pre %>%
+ inner_join(dataset_review_pre) %>%
+ dplyr::select(row, review_scores_rating, recommend)
+model_recommend_pre <- polr(factor(review_scores_rating) ~ recommend, data=recommend_feature_final_pre, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "location"
+reviews_for_feature_pre %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "location"))) %>%
+ mutate(location=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,location) -> location_feature_pre
+
+location_feature_final_pre <- location_feature_pre %>%
+ inner_join(dataset_review_pre) %>%
+ dplyr::select(row, review_scores_rating, location)
+model_location_pre <- polr(factor(review_scores_rating) ~ location, data=location_feature_final_pre, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "price"
+reviews_for_feature_pre %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "price"))) %>%
+ mutate(price_feature=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,price_feature) -> price_feature_pre
+
+price_feature_final_pre <- price_feature_pre %>%
+ inner_join(dataset_review_pre) %>%
+ dplyr::select(row, review_scores_rating, price_feature)
+model_price_pre <- polr(factor(review_scores_rating) ~ price_feature, data=price_feature_final_pre, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "stay"
+reviews_for_feature_pre %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "stay"))) %>%
+ mutate(stay=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,stay) -> stay_feature_pre
+
+stay_feature_final_pre <- stay_feature_pre %>%
+ inner_join(dataset_review_pre) %>%
+ dplyr::select(row, review_scores_rating, stay)
+model_stay_pre <- polr(factor(review_scores_rating) ~ stay, data=stay_feature_final_pre, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "host"
+reviews_for_feature_pre %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "host"))) %>%
+ mutate(host=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,host) -> host_feature_pre
+
+host_feature_final_pre <- host_feature_pre %>%
+ inner_join(dataset_review_pre) %>%
+ dplyr::select(row, review_scores_rating, host)
+model_host_pre <- polr(factor(review_scores_rating) ~ host, data=host_feature_final_pre, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "clean"
+reviews_for_feature_pre %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "clean"))) %>%
+ mutate(clean=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,clean) -> clean_feature_pre
+
+clean_feature_final_pre <- clean_feature_pre %>%
+ inner_join(dataset_review_pre) %>%
+ dplyr::select(row, review_scores_rating, clean)
+model_clean_pre <- polr(factor(review_scores_rating) ~ clean, data=clean_feature_final_pre, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "communication"
+reviews_for_feature_pre %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "communication"))) %>%
+ mutate(communication=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,communication) -> communication_feature_pre
+
+communication_feature_final_pre <- communication_feature_pre %>%
+ inner_join(dataset_review_pre) %>%
+ dplyr::select(row, review_scores_rating, communication)
+model_communication_pre <- polr(factor(review_scores_rating) ~ communication, data=communication_feature_final_pre, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "availability"
+reviews_for_feature_pre %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "availability"))) %>%
+ mutate(availability=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,availability) -> availability_feature_pre
+
+availability_feature_final_pre <- availability_feature_pre %>%
+ inner_join(dataset_review_pre) %>%
+ dplyr::select(row, review_scores_rating, availability)
+model_availability_pre <- polr(factor(review_scores_rating) ~ availability, data=availability_feature_final_pre, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "check"
+reviews_for_feature_pre %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "check"))) %>%
+ mutate(check=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,check) -> check_feature_pre
+
+check_feature_final_pre <- check_feature_pre %>%
+ inner_join(dataset_review_pre) %>%
+ dplyr::select(row, review_scores_rating, check)
+model_check_pre <- polr(factor(review_scores_rating) ~ check, data=check_feature_final_pre, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "easy"
+reviews_for_feature_pre %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "easy"))) %>%
+ mutate(easy=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,easy) -> easy_feature_pre
+
+easy_feature_final_pre <- easy_feature_pre %>%
+ inner_join(dataset_review_pre) %>%
+ dplyr::select(row, review_scores_rating, easy)
+model_easy_pre <- polr(factor(review_scores_rating) ~ easy, data=easy_feature_final_pre, Hess=TRUE, method = c("logistic"))
+
+#Comparing all the feature models
+stargazer::stargazer(model_recommend_pre, model_location_pre, model_price_pre, model_stay_pre, model_host_pre, model_clean_pre, model_communication_pre, model_availability_pre, model_check_pre, model_easy_pre,
+                     type = "text", add.lines = list(c("AIC", round(AIC(model_recommend_pre),1),
+                                                              round(AIC(model_location_pre),1),
+                                                              round(AIC(model_price_pre),1),
+                                                              round(AIC(model_stay_pre),1),
+                                                              round(AIC(model_host_pre),1),
+                                                              round(AIC(model_clean_pre),1),
+                                                              round(AIC(model_communication_pre),1),
+                                                              round(AIC(model_availability_pre),1),
+                                                              round(AIC(model_check_pre),1),
+                                                              round(AIC(model_easy_pre),1))),
+                     out = "features.txt", single.row = T, align = T, flip = T)
+```
+
+```{r}
+#Combining all features into a data.frame
+review_feature_final_rating_pre <- reviews_for_feature_pre %>%
+                               left_join(recommend_feature_pre) %>%
+                               left_join(location_feature_pre) %>%
+                               left_join(price_feature_pre) %>%
+                               left_join(stay_feature_pre) %>%
+                               left_join(host_feature_pre) %>%
+                               left_join(clean_feature_pre) %>%
+                               left_join(communication_feature_pre) %>%
+                               left_join(availability_feature_pre) %>%
+                               left_join(check_feature_pre) %>%
+                               left_join(easy_feature_pre)
+
+#Creating a backup
+#saveRDS(review_feature_final_rating_pre,"review_feature_final_rating_pre.rds")
+review_feature_final_rating_pre <- readRDS("review_feature_final_rating_pre.rds")
+
+#Conducting regression with all the features
+regress_all_features_rating_pre <- review_feature_final_rating_pre %>% dplyr::select(,-c(row, comments, price))
+model_features_all_rating_pre <- polr(factor(review_scores_rating) ~ ., data = regress_all_features_rating_pre)
+stargazer::stargazer(model_features_all_rating_pre, type = "text", out = "feature.txt", single.row = T, align = T, flip = T)
+```
+
+# Feature extraction post-pandemic
+```{r}
+reviews_for_feature_post <- dataset_review_post %>% dplyr::select(row, comments, review_scores_rating, price)
+reviews_for_feature_post$comments <- tolower(reviews_for_feature_post$comments)
+
+#Finding reviews that contain "recommend"
+reviews_for_feature_post %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "recommend"))) %>%
+ mutate(recommend=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,recommend) -> recommend_feature_post
+
+recommend_feature_final_post <- recommend_feature_post %>%
+ inner_join(dataset_review_post) %>%
+ dplyr::select(row, review_scores_rating, recommend)
+model_recommend_post <- polr(factor(review_scores_rating) ~ recommend, data=recommend_feature_final_post, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "location"
+reviews_for_feature_post %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "location"))) %>%
+ mutate(location=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,location) -> location_feature_post
+
+location_feature_final_post <- location_feature_post %>%
+ inner_join(dataset_review_post) %>%
+ dplyr::select(row, review_scores_rating, location)
+model_location_post <- polr(factor(review_scores_rating) ~ location, data=location_feature_final_post, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "price"
+reviews_for_feature_post %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "price"))) %>%
+ mutate(price_feature=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,price_feature) -> price_feature_post
+
+price_feature_final_post <- price_feature_post %>%
+ inner_join(dataset_review_post) %>%
+ dplyr::select(row, review_scores_rating, price_feature)
+model_price_post <- polr(factor(review_scores_rating) ~ price_feature, data=price_feature_final_post, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "stay"
+reviews_for_feature_post %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "stay"))) %>%
+ mutate(stay=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,stay) -> stay_feature_post
+
+stay_feature_final_post <- stay_feature_post %>%
+ inner_join(dataset_review_post) %>%
+ dplyr::select(row, review_scores_rating, stay)
+model_stay_post <- polr(factor(review_scores_rating) ~ stay, data=stay_feature_final_post, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "host"
+reviews_for_feature_post %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "host"))) %>%
+ mutate(host=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,host) -> host_feature_post
+
+host_feature_final_post <- host_feature_post %>%
+ inner_join(dataset_review_post) %>%
+ dplyr::select(row, review_scores_rating, host)
+model_host_post <- polr(factor(review_scores_rating) ~ host, data=host_feature_final_post, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "clean"
+reviews_for_feature_post %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "clean"))) %>%
+ mutate(clean=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,clean) -> clean_feature_post
+
+clean_feature_final_post <- clean_feature_post %>%
+ inner_join(dataset_review_post) %>%
+ dplyr::select(row, review_scores_rating, clean)
+model_clean_post <- polr(factor(review_scores_rating) ~ clean, data=clean_feature_final_post, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "communication"
+reviews_for_feature_post %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "communication"))) %>%
+ mutate(communication=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,communication) -> communication_feature_post
+
+communication_feature_final_post <- communication_feature_post %>%
+ inner_join(dataset_review_post) %>%
+ dplyr::select(row, review_scores_rating, communication)
+model_communication_post <- polr(factor(review_scores_rating) ~ communication, data=communication_feature_final_post, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "availability"
+reviews_for_feature_post %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "availability"))) %>%
+ mutate(availability=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,availability) -> availability_feature_post
+
+availability_feature_final_post <- availability_feature_post %>%
+ inner_join(dataset_review_post) %>%
+ dplyr::select(row, review_scores_rating, availability)
+model_availability_post <- polr(factor(review_scores_rating) ~ availability, data=availability_feature_final_post, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "check"
+reviews_for_feature_post %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "check"))) %>%
+ mutate(check=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,check) -> check_feature_post
+
+check_feature_final_post <- check_feature_post %>%
+ inner_join(dataset_review_post) %>%
+ dplyr::select(row, review_scores_rating, check)
+model_check_post <- polr(factor(review_scores_rating) ~ check, data=check_feature_final_post, Hess=TRUE, method = c("logistic"))
+
+#Finding reviews that contain "easy"
+reviews_for_feature_post %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "easy"))) %>%
+ mutate(easy=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,easy) -> easy_feature_post
+
+easy_feature_final_post <- easy_feature_post %>%
+ inner_join(dataset_review_post) %>%
+ dplyr::select(row, review_scores_rating, easy)
+model_easy_post <- polr(factor(review_scores_rating) ~ easy, data=easy_feature_final_post, Hess=TRUE, method = c("logistic"))
+
+
+#Comparing all the feature models
+stargazer::stargazer(model_recommend_post, model_location_post, model_price_post, model_stay_post, model_host_post, model_clean_post, model_communication_post, model_availability_post, model_check_post, model_easy_post,
+                     type = "text", add.lines = list(c("AIC", round(AIC(model_recommend_post),1),
+                                                              round(AIC(model_location_post),1),
+                                                              round(AIC(model_price_post),1),
+                                                              round(AIC(model_stay_post),1),
+                                                              round(AIC(model_host_post),1),
+                                                              round(AIC(model_clean_post),1),
+                                                              round(AIC(model_communication_post),1),
+                                                              round(AIC(model_availability_post),1),
+                                                              round(AIC(model_check_post),1),
+                                                              round(AIC(model_easy_post),1))),
+                     out = "features.txt", single.row = T, align = T, flip = T)
+```
+
+```{r}
+#Combining all features into a data.frame
+review_feature_final_rating_post <- reviews_for_feature_post %>%
+                               left_join(recommend_feature_post) %>%
+                               left_join(location_feature_post) %>%
+                               left_join(price_feature_post) %>%
+                               left_join(stay_feature_post) %>%
+                               left_join(host_feature_post) %>%
+                               left_join(clean_feature_post) %>%
+                               left_join(communication_feature_post) %>%
+                               left_join(availability_feature_post) %>%
+                               left_join(check_feature_post) %>%
+                               left_join(easy_feature_post)
+
+#Creating a backup
+#saveRDS(review_feature_final_rating_post,"review_feature_final_rating_post.rds")
+review_feature_final_rating_post <- readRDS("review_feature_final_rating_post.rds")
+
+#Conducting regression with all the features
+regress_all_features_rating_post <- review_feature_final_rating_post %>% dplyr::select(,-c(row, comments, price))
+model_features_all_rating_post <- polr(factor(review_scores_rating) ~ ., data = regress_all_features_rating_post)
+stargazer::stargazer(model_features_all_rating_post, type = "text", out = "feature.txt", single.row = T, align = T, flip = T)
+```
+
+# Features for test data
+```{r}
+reviews_for_feature_test <- test_data %>% dplyr::select(row, comments, review_scores_rating, price)
+reviews_for_feature_test$comments <- tolower(reviews_for_feature_test$comments)
+
+#Finding reviews that contain "recommend"
+reviews_for_feature_test %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "recommend"))) %>%
+ mutate(recommend=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,recommend) -> recommend_feature_test
+
+#Finding reviews that contain "location"
+reviews_for_feature_test %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "location"))) %>%
+ mutate(location=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,location) -> location_feature_test
+
+#Finding reviews that contain "price"
+reviews_for_feature_test %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "price"))) %>%
+ mutate(price_feature=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,price_feature) -> price_feature_test
+
+#Finding reviews that contain "stay"
+reviews_for_feature_test %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "stay"))) %>%
+ mutate(stay=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,stay) -> stay_feature_test
+
+#Finding reviews that contain "host"
+reviews_for_feature_test %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "host"))) %>%
+ mutate(host=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,host) -> host_feature_test
+
+#Finding reviews that contain "clean"
+reviews_for_feature_test %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "clean"))) %>%
+ mutate(clean=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,clean) -> clean_feature_test
+
+#Finding reviews that contain "communication"
+reviews_for_feature_test %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "communication"))) %>%
+ mutate(communication=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,communication) -> communication_feature_test
+
+#Finding reviews that contain "availability"
+reviews_for_feature_test %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "availability"))) %>%
+ mutate(availability=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,availability) -> availability_feature_test
+
+#Finding reviews that contain "check"
+reviews_for_feature_test %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "check"))) %>%
+ mutate(check=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,check) -> check_feature_test
+
+#Finding reviews that contain "easy"
+reviews_for_feature_test %>% group_by(row) %>%
+ summarise(TF=sum(str_detect(comments, "easy"))) %>%
+ mutate(easy=ifelse(TF>0, "1", "0")) %>%
+ dplyr::select(row,easy) -> easy_feature_test
+
+#Combining all features into a data.frame
+review_feature_final_rating_test <- reviews_for_feature_test %>%
+                               left_join(recommend_feature_test) %>%
+                               left_join(location_feature_test) %>%
+                               left_join(price_feature_test) %>%
+                               left_join(stay_feature_test) %>%
+                               left_join(host_feature_test) %>%
+                               left_join(clean_feature_test) %>%
+                               left_join(communication_feature_test) %>%
+                               left_join(availability_feature_test) %>%
+                               left_join(check_feature_test) %>%
+                               left_join(easy_feature_test)
+
+#Creating a backup
+#saveRDS(review_feature_final_rating_test,"review_feature_final_rating_test.rds")
+review_feature_final_rating_test <- readRDS("review_feature_final_rating_test.rds")
+```
+
+# Sentiment Analysis
+```{r}
+#Check afinn
+#get_afinn <- get_sentiments("afinn")
+#saveRDS(get_afinn, "get_afinn.rds")
+get_afinn <- readRDS("get_afinn.rds")
+afinn <- inner_join(tokens_all_review, get_afinn)
+
+afinn$sentiment <- ifelse(afinn$value>0,"positive",ifelse(afinn$value<0,"negative","neutral"))
+
+afinnsentiments = afinn %>%
+  group_by(row,sentiment) %>% 
+  summarise(total=n(), wordcount = mean(wordcount)) %>%
+pivot_wider(names_from=sentiment, values_from=total,values_fill=list(total=0)) %>%
+mutate(sentiment = (positive-negative)/(positive+negative))
+
+afinnsentiments
+
+#check bing 
+get_bing <- readRDS("get_bing.rds")
+#get_bing <- get_sentiments("bing")
+bing <- inner_join(tokens_all_review,get_bing)
+#saveRDS(get_bing, "get_bing.rds")
+
+#sentiment score of bing
+bingsentiments = bing %>%
+  group_by(row, sentiment) %>%
+  summarise(total=n(), wordcount = mean(wordcount)) %>%
+  pivot_wider(names_from=sentiment, values_from=total,values_fill=list(total=0)) %>%
+  mutate(sentiment = (positive-negative)/(positive+negative))
+
+bingsentiments
+
+#calculate sentiment score of nrc
+#get_nrc <- get_sentiments("nrc")
+get_nrc <- readRDS("get_nrc.rds")
+nrc <- inner_join(tokens_all_review,get_nrc)
+#saveRDS(get_nrc, "get_nrc.rds")
+
+nrcsentiments = nrc%>%
+  group_by(row,sentiment) %>%
+  summarise(total=n(), wordcount = mean(wordcount)) %>%
+  filter(sentiment %in% c("positive","negative")) %>%
+pivot_wider(names_from=sentiment, values_from=total,values_fill=list(total=0)) %>%
+mutate(sentiment = (positive-negative)/(positive+negative))
+
+nrcsentiments
+
+#Check loughran
+#get_loughran <- get_sentiments("loughran")
+get_loughran <- readRDS("get_loughran.rds")
+loughran<- inner_join(tokens_all_review,get_loughran)
+#saveRDS(get_loughran, "get_loughran.rds")
+
+loughransentiments = loughran %>%
+  group_by(row,sentiment) %>%
+  summarise(total=n(), wordcount = mean(wordcount)) %>%
+  filter(sentiment %in% c("positive","negative")) %>%
+pivot_wider(names_from=sentiment, values_from=total,values_fill=list(total=0)) %>%
+mutate(sentiment = (positive-negative)/(positive+negative))
+
+loughransentiments
+```
+
+# Getting dictionary coverages
+```{r}
+afinnsentiments_coverage<-afinnsentiments%>%
+  mutate(afinn_pos_coverage=positive/wordcount*100)%>%
+  mutate(afinn_neg_coverage=negative/wordcount*100)%>%
+  mutate(afinn_coverage=(negative+positive)/wordcount*100)
+
+bingsentiments_coverage<-bingsentiments%>%
+  mutate(bing_pos_coverage=positive/wordcount*100)%>%
+  mutate(bing_neg_coverage=negative/wordcount*100)%>%
+  mutate(bing_coverage=(negative+positive)/wordcount*100)
+
+nrcsentiments_coverage<-nrcsentiments%>%
+  mutate(nrc_pos_coverage=positive/wordcount*100)%>%
+  mutate(nrc_neg_coverage=negative/wordcount*100)%>%
+  mutate(nrc_coverage=(negative+positive)/wordcount*100)
+
+loughransentiments_coverage<-loughransentiments%>%
+  mutate(loughran_pos_coverage=positive/wordcount*100)%>%
+  mutate(loughran_neg_coverage=negative/wordcount*100)%>%
+  mutate(loughran_coverage=(negative+positive)/wordcount*100)
+
+afinn_coverage<-
+  afinnsentiments_coverage%>%
+  dplyr::select(row,afinn_pos_coverage,afinn_neg_coverage,afinn_coverage)
+
+bing_coverage<-
+  bingsentiments_coverage%>%
+  dplyr::select(row,bing_pos_coverage,bing_neg_coverage,bing_coverage)
+
+nrc_coverage<-
+  nrcsentiments_coverage%>%
+  dplyr::select(row,nrc_pos_coverage,nrc_neg_coverage,nrc_coverage)
+
+loughran_coverage<-
+  loughransentiments_coverage%>%
+  dplyr::select(row,loughran_pos_coverage,loughran_neg_coverage,loughran_coverage)
+
+
+all_coverage<- afinn_coverage %>% left_join(bing_coverage)
+all_coverage<- all_coverage %>% left_join(nrc_coverage)
+all_coverage<- all_coverage %>% left_join(loughran_coverage)
+
+all_coverage[is.na(all_coverage)] <- 0
+
+all_coverage<-all_coverage%>%
+  dplyr::select(row,afinn_pos_coverage,afinn_neg_coverage,afinn_coverage,
+         bing_pos_coverage,bing_neg_coverage,bing_coverage,
+         nrc_pos_coverage,nrc_neg_coverage,nrc_coverage,
+         loughran_pos_coverage,loughran_neg_coverage,loughran_coverage)
+
+
+dictionary_coverage<-data.frame(cc='coverage',
+                       afinn_pos= mean(all_coverage$afinn_pos_coverage),
+                       afinn_neg= mean(all_coverage$afinn_neg_coverage),
+                      # afinn= mean(All_dictionary_coverage$afinn_coverage),
+                       bing_pos= mean(all_coverage$bing_pos_coverage),
+                       bing_neg= mean(all_coverage$bing_neg_coverage),
+                       #bing= mean(All_dictionary_coverage$bing_coverage),
+                       nrc_pos= mean(all_coverage$nrc_pos_coverage),
+                       nrc_neg= mean(all_coverage$nrc_neg_coverage),
+                       # nrc= mean(All_dictionary_coverage$nrc_coverage)
+                       lough_pos= mean(all_coverage$loughran_pos_coverage),
+                       lough_neg= mean(all_coverage$loughran_neg_coverage))
+                     
+dictionary_coverage<-dictionary_coverage%>%
+  pivot_longer(!cc,names_to = "dictionary", values_to ="coverage")
+
+dictionary_coverage
+dictionary_coverage_plot <- ggplot(dictionary_coverage,aes(x=dictionary,y=coverage))+geom_col(aes(fill=dictionary))+ggtitle("Coverage of Each Dictionary")
+ggsave("dictionary_coverage_plot.png")
+```
+
+# Getting polarity of dictionaries for the reviews
+```{r}
+#calculate the number of positive and negative tokens can be detected by each dictionary
+afinn_1<-afinn %>%
+  group_by(sentiment) %>%
+  summarise(total=n())
+
+bing_1<-bing %>%
+  filter(sentiment %in% c("positive","negative")) %>%
+  group_by(sentiment) %>%
+  summarise(total=n())
+
+loughran_1<-loughran%>%
+  filter(sentiment %in% c("positive","negative")) %>%
+  group_by(sentiment) %>%
+  summarise(total=n())
+
+nrc_1<-nrc%>%
+  filter(sentiment %in% c("positive","negative")) %>%
+  group_by(sentiment) %>%
+  summarise(total=n())
+```
+
+```{r}
+#plot the total number of positive and negative tokens respect to each dictionary
+evaluation1<-data.frame(polarity=c('negative','positive'),
+            afinn=afinn_1$total,
+            bing=bing_1$total,
+            loughran=loughran_1$total,
+            nrc=nrc_1$total)
+           
+evaluation1<-evaluation1%>%
+  pivot_longer(!polarity,names_to = "dictionary", values_to ="total")
+
+evaluation1%>%
+  group_by(dictionary,polarity)%>%
+  ggplot(aes(x=dictionary,y=total))+geom_col(aes(fill=polarity),position = position_dodge2(preserve = 'single'))+geom_text(aes(label=total),position = position_dodge2(width=0.8,preserve = 'single'),vjust=-0.5,hjust=0.5)
+ggsave("evaluation1.png")
+```
+
+# Getting changes of sentiments on a monthly-basis
+```{r}
+for_progression <-  tokens_all_review %>% left_join(all_reviews_listings, by = "row") %>% select(row, month_year, word, date) %>% arrange(month_year)
+
+for_progression <- for_progression %>% mutate(quarter = substr(quarters(for_progression$date), 2, 2)) 
+
+review_sentiment <- for_progression %>% 
+                    group_by(month_year) %>%
+                    mutate(row = 1:n(),
+                           index = round(row/n(), 2)) %>%
+                    inner_join(get_bing) %>%
+                    group_by(month_year, index, sentiment) %>%
+                    summarise(total=n()) %>%
+                    pivot_wider(names_from=sentiment, values_from=total, values_fill=list(total=0)) %>%
+                    mutate(sentiment = (positive-negative)/(positive+negative)) %>%
+                    summarise(sentiments = sum(sentiment)) %>%
+                    arrange(desc(sentiments))
+
+ggplot(review_sentiment, aes(index, factor(month_year, levels = sort(unique(month_year), decreasing = TRUE)), fill = sentiments)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2() +
+  scale_x_continuous(labels = scales::percent, expand = c(0, 0)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  labs(x = "Month-Progression", y = "Month-Year") +
+  ggtitle("Sentiment of Customers about Airbnb", subtitle = "Summary of net sentiment score throughout 2019-2021") +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = "top")
+```
+
+# Checking emotions from NRC sentiment dictionary
+```{r}
+#Getting nrc sentiment dictionary
+nrcsentiments2 <- tokens_all_review %>% merge(dataset_review[,c("row", "city", "period", "month_year")], by = "row") %>%
+                  group_by(city) %>%
+                  mutate(words = n()) %>%
+                  left_join(get_nrc) %>%
+                  mutate(city = factor(city),
+                         sentiment = factor(sentiment)) %>%
+                  arrange(month_year)
+
+#Finding the frequency of sentiment words
+nrcsentiments3 <- nrcsentiments2 %>%
+                  group_by(city) %>%
+                  group_by(city, period, sentiment) %>%
+                  summarise(sentiment = unique(sentiment),
+                  sentiment_freq = n(),
+                  words = unique(words)) %>%
+                  filter(is.na(sentiment) == F) %>%
+                  mutate(percentage = round(sentiment_freq/words*100, 1)) 
+
+#Plotting sentiments across cities  
+nrcsentiments3 %>% filter(sentiment != "positive",
+                          sentiment != "negative") %>%
+                   mutate(sentiment = factor(sentiment, 
+                            levels = c("anger", "fear", "disgust", "sadness",
+                                   "surprise", "anticipation", "trust", "joy"))) %>%
+                  ggplot(aes(city, percentage, fill = sentiment)) +    
+                  geom_bar(stat="identity", position=position_dodge()) + 
+                  facet_wrap(~period) +
+                  scale_fill_brewer(palette = "RdBu") +
+                  theme_bw() +
+                  theme(legend.position = "right") +
+                  coord_flip()
+ggsave("nrcsentiments3.png")
+
+nrcsentiments4 <- nrcsentiments2 %>%
+                  filter(!is.na(sentiment),
+                         sentiment != "negative",
+                         sentiment != "positive") %>%
+                  mutate(sentiment = factor(sentiment, levels = c("anger", "fear",  "trust", "joy", "sadness", 
+                                                                  "anticipation",   "disgust", "surprise"))) %>%
+                  group_by(period) %>%
+                  count(word, sentiment, sort = TRUE) %>%
+                  group_by(period, sentiment) %>%
+                  top_n(5) %>%
+                  mutate(score = n/sum(n))
+
+nrcsentiments4 %>% group_by(period) %>%
+                   slice_max(score, n = 50) %>%
+                   arrange(desc(score)) %>%
+                   ungroup() %>%
+                   ggplot(aes(x = reorder(word, score), y = score, fill = word)) +
+                   facet_wrap(sentiment~period, ncol = 4, scales = "free_y") +
+                   geom_col(show.legend = FALSE) +
+                   coord_flip() +
+                   labs(x = "Words")
+ggsave("nrcsentiments3.2.png")
+
+# Checking polarity of sentiments by cities  
+nrcsentiments3 %>% filter(sentiment == "positive" | sentiment == "negative") %>%
+                   dplyr::select(-percentage, -words) %>%
+                   mutate(sentiment_sum = sum(sentiment_freq),
+                          positive = sentiment_sum-sentiment_freq) %>%
+                   filter(sentiment != "positive") %>%
+                   rename(negative = sentiment_freq) %>%
+                   dplyr::select(city, period, positive, negative) %>%
+                   group_by(city, period) %>%
+                   summarise(polarity = positive/negative) %>%
+                   ggplot(aes(reorder(city, polarity, mean), polarity)) +    
+                   geom_point(size = 3) + 
+                   theme_bw() +
+                   labs(y = "Polarity\n\nMore Negative                                More Positive\n",
+                        x = "City") +
+                   facet_wrap(~period) +
+                   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+ggsave("nrcsentiments3.png")
+
+nrcsentiments5 <- nrcsentiments2 %>%
+                  group_by(city) %>%
+                  filter(is.na(sentiment) | sentiment == "negative" | sentiment == "positive") %>%
+                  mutate(sentiment = as.character(sentiment),
+                         sentiment = case_when(is.na(sentiment) ~ "0", TRUE ~ sentiment),
+                         sentiment = case_when(sentiment == "0" ~ 0, sentiment == "positive" ~ 1, TRUE ~ -1),
+                         row = 1:n(),
+                         index = as.numeric(cut2(row, m=100))) %>%
+                  group_by(city, period, index) %>%
+                  dplyr::summarize(index = unique(index),
+                                   polarity = mean(sentiment))
+
+nrcsentiments5 %>% ggplot(aes(index, polarity)) + 
+                  facet_wrap(vars(city), scales="free_x") +
+                  geom_smooth(se = F, col = "black") + 
+                  theme_bw() +
+                  labs(y = "polarity ratio (mean by bin)",
+                       x = "index (bin)",
+                       title = "Change of Polarity over time")
+ggsave("nrcsentiments5.png")
+```
+
+# Extract feelings from NRC dictionary
+```{r}
+nrc_feelings_count <- get_nrc_sentiment(dataset$grouped_reviews)
+
+#transpose
+transposed_df <- data.frame(t(nrc_feelings_count))
+
+#The function rowSums computes column sums across rows for each level of a grouping variable.
+nrc_df <- data.frame(rowSums(transposed_df[2:253]))
+
+#Transformation and cleaning
+names(nrc_df)[1] <- "count"
+nrc_df <- cbind("sentiment" = rownames(nrc_df), nrc_df)
+rownames(nrc_df) <- NULL
+nrc_df2 <- nrc_df[1:8,]
+
+#Plot two - count of words associated with each sentiment, expressed as a percentage
+nrc_feelings <- barplot(
+  sort(colSums(prop.table(nrc_feelings_count[, 1:8]))), 
+  horiz = TRUE, 
+  cex.names = 0.7, 
+  las = 1, 
+  main = "Emotions in Text", xlab="Percentage"
+)
+ggsave("nrc_feelings.png")
+```
+
+# Regression of NRC emotions with ratings
+```{r}
+nrc_feelings <- tokens_all %>%
+                inner_join(get_nrc) %>%
+                count(sentiment,listing_id) %>%
+                spread(sentiment,n) %>%
+                mutate(nrc_sentiment = (positive-negative)/(positive+negative)) %>%
+                dplyr::select(-c(positive,negative)) %>%
+                pivot_longer(anger:nrc_sentiment,names_to = "feeling",values_to="nrc_sentiment") %>%
+                na.omit()
+
+#Running regressions for nrc feelings
+nrc_feelings_model = nrc_feelings %>% spread(feeling, nrc_sentiment, fill = 0)
+nrc_feelings_model = left_join(nrc_feelings_model, listing_id_avg_rating)
+nrc_feelings_model$avg_rating = as.numeric(nrc_feelings_model$avg_rating)
+
+model21 <- lm(log(avg_rating)~.-listing_id, data=nrc_feelings_model)
+stargazer::stargazer(model21, type = "text")
+
+#Plotting relationships
+cplot(model21, "anger")
+cplot(model21, "anticipation")
+cplot(model21, "disgust")
+cplot(model21, "fear")
+cplot(model21, "joy")
+cplot(model21, "sadness")
+cplot(model21, "surprise")
+cplot(model21, "trust")
+```
+
+# NRC Emotions over the period and on a country-basis
+```{r}
+to_join <- all_reviews_listings %>% group_by(listing_id, period) %>% summarise(date = date, country = country)
+
+to_join <- to_join %>% separate(listing_id, into = c("listing_id", "s"), sep = "_")
+to_join$s <- NULL
+
+nrc_feelings2 <- nrc_feelings %>% left_join(to_join, by = "listing_id")
+
+nrc_feelings2 %>% filter(feeling != "nrc_sentiment") %>%
+  group_by(feeling, date) %>% 
+  summarise(nrc_sentiment = mean(nrc_sentiment), country = country) %>% 
+  ggplot(aes(date, nrc_sentiment, color = feeling)) + 
+  geom_line() + 
+  facet_wrap(~feeling) + 
+  geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") + 
+  geom_smooth() + 
+  labs(x = "Date", y = "Emotions Levels", title = "Change of Emotions over Time - Overall", color = "Emotion")
+
+nrc_feelings2 %>% filter(country == "USA") %>% 
+  group_by(feeling, date) %>% 
+  summarise(nrc_sentiment = mean(nrc_sentiment), country = country) %>% 
+  ggplot(aes(date, nrc_sentiment, color = feeling)) + 
+  geom_line() + 
+  facet_grid(feeling~.) + 
+  geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") + 
+  geom_smooth() + 
+  labs(x = "Date", y = "Emotions Levels", title = "Change of Emotions over Time - USA", color = "Emotion")
+
+nrc_feelings2 %>% filter(country == "Italy") %>% 
+  group_by(feeling, date) %>% 
+  summarise(nrc_sentiment = mean(nrc_sentiment), country = country) %>% 
+  ggplot(aes(date, nrc_sentiment, color = feeling)) + 
+  geom_line() + facet_grid(feeling~.) + 
+  geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") + 
+  geom_smooth() +
+  labs(x = "Date", y = "Emotions Levels", title = "Change of Emotions over Time - Italy", color = "Emotion")
+
+nrc_feelings2 %>% filter(country == "Netherlands") %>% 
+  group_by(feeling, date) %>% 
+  summarise(nrc_sentiment = mean(nrc_sentiment), country = country) %>% 
+  ggplot(aes(date, nrc_sentiment, color = feeling)) + 
+  geom_line() + 
+  facet_grid(feeling~.) + 
+  geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") + 
+  geom_smooth() +
+  labs(x = "Date", y = "Emotions Levels", title = "Change of Emotions over Time - Netherlands", color = "Emotion")
+
+nrc_feelings2 %>% filter(country == "Thailand") %>% 
+  group_by(feeling, date) %>% 
+  summarise(nrc_sentiment = mean(nrc_sentiment), country = country) %>% 
+  ggplot(aes(date, nrc_sentiment, color = feeling)) + 
+  geom_line() + 
+  facet_grid(feeling~.) + 
+  geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") + 
+  geom_smooth() +
+  labs(x = "Date", y = "Emotions Levels", title = "Change of Emotions over Time - Thailand", color = "Emotion")
+
+nrc_feelings2 %>% filter(country == "Spain") %>% 
+  group_by(feeling, date) %>% 
+  summarise(nrc_sentiment = mean(nrc_sentiment), country = country) %>% 
+  ggplot(aes(date, nrc_sentiment, color = feeling)) + 
+  geom_line() + 
+  facet_grid(feeling~.) + 
+  geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") + 
+  geom_smooth() +
+  labs(x = "Date", y = "Emotions Levels", title = "Change of Emotions over Time - Spain", color = "Emotion")
+
+nrc_feelings2 %>% filter(country == "Hong Kong") %>% 
+  group_by(feeling, date) %>% 
+  summarise(nrc_sentiment = mean(nrc_sentiment), country = country) %>% 
+  ggplot(aes(date, nrc_sentiment, color = feeling)) + 
+  geom_line() + 
+  facet_grid(feeling~.) + 
+  geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") + 
+  geom_smooth() +
+  labs(x = "Date", y = "Emotions Levels", title = "Change of Emotions over Time - Hong Kong", color = "Emotion")
+
+nrc_feelings2 %>% filter(country == "Turkey") %>% 
+  group_by(feeling, date) %>% 
+  summarise(nrc_sentiment = mean(nrc_sentiment), country = country) %>% 
+  ggplot(aes(date, nrc_sentiment, color = feeling)) + 
+  geom_line() + 
+  facet_grid(feeling~.) + 
+  geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") + 
+  geom_smooth() +
+  labs(x = "Date", y = "Emotions Levels", title = "Change of Emotions over Time - Turkey", color = "Emotion")
+
+nrc_feelings2 %>% filter(country == "UK") %>% 
+  group_by(feeling, date) %>% 
+  summarise(nrc_sentiment = mean(nrc_sentiment), country = country) %>% 
+  ggplot(aes(date, nrc_sentiment, color = feeling)) + 
+  geom_line() + 
+  facet_grid(feeling~.) + 
+  geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") + 
+  geom_smooth() +
+  labs(x = "Date", y = "Emotions Levels", title = "Change of Emotions over Time - UK", color = "Emotion")
+
+nrc_feelings2 %>% filter(country == "Singapore") %>% 
+  group_by(feeling, date) %>% 
+  summarise(nrc_sentiment = mean(nrc_sentiment), country = country) %>% 
+  ggplot(aes(date, nrc_sentiment, color = feeling)) + 
+  geom_line() + 
+  facet_grid(feeling~.) + 
+  geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") + 
+  geom_smooth() +
+  labs(x = "Date", y = "Emotions Levels", title = "Change of Emotions over Time - Singapore", color = "Emotion")
+
+nrc_feelings2 %>% filter(country == "Australia") %>% 
+  group_by(feeling, date) %>% 
+  summarise(nrc_sentiment = mean(nrc_sentiment), country = country) %>% 
+  ggplot(aes(date, nrc_sentiment, color = feeling)) + 
+  geom_line() + 
+  facet_grid(feeling~.) + 
+  geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") + 
+  geom_smooth() +
+  labs(x = "Date", y = "Emotions Levels", title = "Change of Emotions over Time - Australia", color = "Emotion")
+
+nrc_feelings2 %>% filter(country == "France") %>% 
+  group_by(feeling, date) %>% 
+  summarise(nrc_sentiment = mean(nrc_sentiment), country = country) %>% 
+  ggplot(aes(date, nrc_sentiment, color = feeling)) + 
+  geom_line() + 
+  facet_grid(feeling~.) + 
+  geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") + 
+  geom_smooth() +
+  labs(x = "Date", y = "Emotions Levels", title = "Change of Emotions over Time - France", color = "Emotion")
+
+nrc_feelings2 %>% filter(country == "Portugal") %>% 
+  group_by(feeling, date) %>% 
+  summarise(nrc_sentiment = mean(nrc_sentiment), country = country) %>% 
+  ggplot(aes(date, nrc_sentiment, color = feeling)) + 
+  geom_line() + 
+  facet_grid(feeling~.) + 
+  geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") + 
+  geom_smooth() +
+  labs(x = "Date", y = "Emotions Levels", title = "Change of Emotions over Time - Portugal", color = "Emotion")
+
+nrc_feelings2 %>% filter(country == "Austria") %>% 
+  group_by(feeling, date) %>% 
+  summarise(nrc_sentiment = mean(nrc_sentiment), country = country) %>% 
+  ggplot(aes(date, nrc_sentiment, color = feeling)) + 
+  geom_line() + 
+  facet_grid(feeling~.) + 
+  geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") + 
+  geom_smooth() +
+  labs(x = "Date", y = "Emotions Levels", title = "Change of Emotions over Time - Austria", color = "Emotion")
+```
+
+# Getting all sentiments for regressing
+```{r}
+# Getting average reviewer ratings by each stores for better relating the ratings with the curent dataset
+listing_id_avg_rating <- dataset %>% group_by(listing_id) %>% summarise(avg_rating = mean(review_scores_rating))
+listing_id_avg_rating <- merge(listing_id_avg_rating, dataset[, c("listing_id", "period")], by = "listing_id", all.x = TRUE)
+
+# Bing Liu - Sentiment Dictionary 
+tokens_all %>% inner_join(get_bing) %>%
+  count(sentiment,listing_id) %>% spread(sentiment,n) %>%
+  mutate(bing_liu_sentiment = positive-negative) %>%
+  dplyr::select(listing_id,bing_liu_sentiment) -> bing_liu_sentiment_listing
+
+bing_liu_sentiment_listing <- bing_liu_sentiment_listing %>%
+  left_join(listing_id_avg_rating)
+
+# NRC Dictionary 
+tokens_all %>% inner_join(get_nrc) %>% 
+  count(sentiment,listing_id) %>% 
+  spread(sentiment,n)  -> emotions_nrc
+
+emotions_nrc <- emotions_nrc %>% 
+  left_join(listing_id_avg_rating) %>% 
+  mutate(sentiment_nrc = positive-negative)
+
+# Afinn Dictionary
+tokens_all %>% inner_join(get_afinn) %>% 
+  group_by(listing_id) %>% 
+  summarise(sentiment_affin = sum(value)) -> sentiment_affin
+
+sentiment_affin <- sentiment_affin %>% 
+  left_join(listing_id_avg_rating)
+
+# Loughran Dictionary
+tokens_all %>% inner_join(get_loughran) %>% 
+  count(sentiment,listing_id) %>% 
+  spread(sentiment,n) -> sentiments_loughran
+
+sentiments_loughran <- sentiments_loughran %>% 
+  left_join(listing_id_avg_rating) %>% 
+  mutate(sentiment_loughran = positive-negative) %>% 
+  dplyr::select(listing_id,avg_rating,sentiment_loughran,period) 
+```
+
+# Building master datasets for modelling
+```{r}
+all_together_sentiments_listing <- data.frame()
+all_together_sentiments_listing <- bing_liu_sentiment_listing %>% 
+  left_join(emotions_nrc) 
+all_together_sentiments_listing <- all_together_sentiments_listing %>%
+  left_join(sentiment_affin)
+all_together_sentiments_listing <- all_together_sentiments_listing %>%
+  left_join(sentiments_loughran)
+all_together_sentiments_listing <- all_together_sentiments_listing %>%
+  na.omit()
+all_together_sentiments_listing <- unique(all_together_sentiments_listing)
+
+
+# Plot the sentiment
+p1 <- all_together_sentiments_listing %>%
+        mutate(index = row_number(), sign = sign(bing_liu_sentiment)) %>%
+        ggplot(aes(x=index,y=bing_liu_sentiment, fill = sign))+
+        geom_bar(stat="identity")+
+        facet_wrap(~period)
+p2 <- all_together_sentiments_listing %>%
+        mutate(index = row_number(), sign = sign(sentiment_nrc)) %>%
+        ggplot(aes(x=index,y=sentiment_nrc, fill = sign))+
+        geom_bar(stat="identity")+
+        facet_wrap(~period)
+p3 <- all_together_sentiments_listing %>%
+        mutate(index = row_number(), sign = sign(sentiment_affin)) %>%
+        ggplot(aes(x=index,y=sentiment_affin, fill = sign))+
+        geom_bar(stat="identity")+
+        facet_wrap(~period)
+p4 <- all_together_sentiments_listing %>%
+        mutate(index = row_number(), sign = sign(sentiment_loughran)) %>%
+        ggplot(aes(x=index,y=sentiment_loughran, fill = sign))+
+        geom_bar(stat="identity")+
+        facet_wrap(~period)
+p5 <- grid.arrange(p1,p2,p3,p4)
+ggsave("p5.png", p5)
+```
+
+# Estimation testing sentiments
+```{r}
+#Plotting sentiments boxplots by period
+ggarrange(ggplot(all_together_sentiments_listing, aes(period, bing_liu_sentiment, color = period)) +
+  geom_boxplot() + geom_point(),
+
+ggplot(all_together_sentiments_listing, aes(period, sentiment_affin, color = period)) +
+  geom_boxplot() + geom_point(),
+
+ggplot(all_together_sentiments_listing, aes(period, sentiment_loughran, color = period)) +
+  geom_boxplot() + geom_point(),
+
+ggplot(all_together_sentiments_listing, aes(period, sentiment_nrc, color = period)) +
+  geom_boxplot() + geom_point(),
+common.legend = TRUE, legend = "bottom")
+
+#Plotting emotions boxplots by period
+ggarrange(ggplot(all_together_sentiments_listing, aes(period, anger, color = period)) +
+  geom_boxplot() + geom_point(),
+
+ggplot(all_together_sentiments_listing, aes(period, anticipation, color = period)) +
+  geom_boxplot() + geom_point(),
+
+ggplot(all_together_sentiments_listing, aes(period, disgust, color = period)) +
+  geom_boxplot() + geom_point(),
+
+ggplot(all_together_sentiments_listing, aes(period, fear, color = period)) +
+  geom_boxplot() + geom_point(),
+
+ggplot(all_together_sentiments_listing, aes(period, sadness, color = period)) +
+  geom_boxplot() + geom_point(),
+
+ggplot(all_together_sentiments_listing, aes(period, trust, color = period)) +
+  geom_boxplot() + geom_point(),
+
+ggplot(all_together_sentiments_listing, aes(period, surprise, color = period)) +
+  geom_boxplot() + geom_point(),
+
+ggplot(all_together_sentiments_listing, aes(period, joy, color = period)) +
+  geom_boxplot() + geom_point(),
+common.legend = TRUE, legend = "bottom")
+
+
+#Creating linear model
+sentiments.lm <- lm(bing_liu_sentiment ~ period, all_together_sentiments_listing)
+
+#Extracting means and 95% confidence intervals
+sentiments.emm <- emmeans(sentiments.lm, ~period)
+kable(sentiments.emm, caption = "Mean sentiment scores and 95% CIs ")
+
+#Estimating the differences between means
+sentiments.constrast <- confint(pairs(sentiments.emm, reverse = TRUE))
+kable(sentiments.constrast, caption = "Differences between the mean sentiments before and after the pandemic")
+
+#Visualizing the estimations
+avg.sentiments <- grid.arrange(
+                 ggplot(summary(sentiments.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Bing Sentiment Scores", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="Sentiment scores before and after the pandemic (Bing Liu)"),
+                 
+                 ggplot(sentiments.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Bing Sentiment Scores", 
+                        subtitle="Error bars are 95% CIs", title="Sentiment scores before and after the pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+
+
+# Bing Liu
+model17 <- lm(avg_rating~bing_liu_sentiment + period, 
+             data=all_together_sentiments_listing)
+
+# NRC affection 
+model18 <- lm(avg_rating~sentiment_nrc + period,
+             data=all_together_sentiments_listing)
+
+#Afinn 
+model19 <- lm(avg_rating~sentiment_affin + period,
+             data=all_together_sentiments_listing)
+# Loughran
+model20 <- lm(avg_rating~sentiment_loughran + period, 
+             data=all_together_sentiments_listing)
+#saveRDS(model17, "model17.rds")
+#saveRDS(model18, "model18.rds")
+#saveRDS(model19, "model19.rds")
+#saveRDS(model20, "model20.rds")
+model17 <- readRDS("model17.rds")
+model18 <- readRDS("model18.rds")
+model19 <- readRDS("model19.rds")
+model20 <- readRDS("model20.rds")
+
+stargazer::stargazer(model17,model18,model19,model20,type = "text")
+
+```
+
+# Final Regression and predictive analysis
+```{r}
+#Knn master dataset - pre-pandemic
+all_together_sentiments_listing_before <- all_together_sentiments_listing %>% filter(period == "Before Pandemic") 
+review_feature_final_rating_pre_join <- review_feature_final_rating_pre %>% left_join(all_reviews_listings, by = "row") 
+review_feature_final_rating_pre_join <- review_feature_final_rating_pre_join %>% select(-c(1, 2, 16:56))
+review_feature_final_rating_pre_join <- review_feature_final_rating_pre_join %>% separate(listing_id, into = c("listing_id", "s"), sep = "_")
+review_feature_final_rating_pre_join$s <- NULL
+review_feature_final_rating_pre_join[,3:12] <- lapply(review_feature_final_rating_pre_join[,3:12], as.integer)
+review_feature_final_rating_pre_join <- review_feature_final_rating_pre_join %>% group_by(listing_id) %>%
+                                          summarise(avg_rating = mean(review_scores_rating.x),
+                                                    price = mean(price.x),
+                                                    recommend_feature = sum(recommend),
+                                                    location_feature = sum(location),
+                                                    price_feature = sum(price_feature),
+                                                    stay_feature = sum(stay),
+                                                    host_feature = sum(host),
+                                                    clean_feature = sum(clean),
+                                                    communication_feature = sum(communication),
+                                                    availability_feature = sum(availability),
+                                                    check_feature = sum(check),
+                                                    easy_feature = sum(easy))
+dataset_knn_pre <- review_feature_final_rating_pre_join %>% left_join(all_together_sentiments_listing_before, by = "listing_id")
+dataset_knn_pre$avg_rating.y <- NULL
+dataset_knn_pre$period <- NULL
+dataset_knn_pre$listing_id <- NULL
+dataset_knn_pre[is.na(dataset_knn_pre)] <- 0
+
+names(dataset_knn_pre)[1] <- paste("rating")
+dataset_knn_pre$rating <- round(dataset_knn_pre$rating, 0)
+dataset_knn_pre$rating <- as.factor(dataset_knn_pre$rating)
+
+#saveRDS(dataset_knn_pre, "dataset_knn_pre.rds")
+
+#Knn master dataset - post-pandemic
+all_together_sentiments_listing_after <- all_together_sentiments_listing %>% filter(period == "After Pandemic")
+review_feature_final_rating_post_join <- review_feature_final_rating_post %>% left_join(all_reviews_listings, by = "row") 
+review_feature_final_rating_post_join <- review_feature_final_rating_post_join %>% select(-c(1, 2, 16:56))
+review_feature_final_rating_post_join <- review_feature_final_rating_post_join %>% separate(listing_id, into = c("listing_id", "s"), sep = "_")
+review_feature_final_rating_post_join$s <- NULL
+review_feature_final_rating_post_join[,3:12] <- lapply(review_feature_final_rating_post_join[,3:12], as.integer)
+review_feature_final_rating_post_join <- review_feature_final_rating_post_join %>% group_by(listing_id) %>%
+                                          summarise(avg_rating = mean(review_scores_rating.x),
+                                                    price = mean(price.x),
+                                                    recommend_feature = sum(recommend),
+                                                    location_feature = sum(location),
+                                                    price_feature = sum(price_feature),
+                                                    stay_feature = sum(stay),
+                                                    host_feature = sum(host),
+                                                    clean_feature = sum(clean),
+                                                    communication_feature = sum(communication),
+                                                    availability_feature = sum(availability),
+                                                    check_feature = sum(check),
+                                                    easy_feature = sum(easy))
+dataset_knn_post <- review_feature_final_rating_post_join %>% left_join(all_together_sentiments_listing_after, by = "listing_id")
+dataset_knn_post$avg_rating.y <- NULL
+dataset_knn_post$period <- NULL
+dataset_knn_post$listing_id <- NULL
+dataset_knn_post[is.na(dataset_knn_post)] <- 0
+names(dataset_knn_post)[1] <- paste("rating")
+dataset_knn_post$rating <- round(dataset_knn_post$rating, 0)
+dataset_knn_post$rating <- as.factor(dataset_knn_post$rating)
+
+
+#saveRDS(dataset_knn_post, "dataset_knn_post.rds")
+
+#Knn test data - 2022
+# Getting average reviewer ratings by each stores for better relating the ratings with the curent dataset
+listing_id_avg_rating_test <- test_data %>% group_by(listing_id) %>% summarise(avg_rating = mean(review_scores_rating))
+listing_id_avg_rating_test <- merge(listing_id_avg_rating_test, test_data[, c("listing_id", "period")], by = "listing_id", all.x = TRUE)
+
+# Bing Liu - Sentiment Dictionary 
+tokens_all_test %>% inner_join(get_bing) %>%
+  count(sentiment,listing_id) %>% spread(sentiment,n) %>%
+  mutate(bing_liu_sentiment = positive-negative) %>%
+  dplyr::select(listing_id,bing_liu_sentiment) -> bing_liu_sentiment_listing_test
+
+bing_liu_sentiment_listing_test <- bing_liu_sentiment_listing_test %>%
+  left_join(listing_id_avg_rating_test)
+
+# NRC Dictionary 
+tokens_all_test %>% inner_join(get_nrc) %>% 
+  count(sentiment,listing_id) %>% 
+  spread(sentiment,n)  -> emotions_nrc_test
+
+emotions_nrc_test <- emotions_nrc_test %>% 
+  left_join(listing_id_avg_rating_test) %>% 
+  mutate(sentiment_nrc = positive-negative)
+
+# Afinn Dictionary
+tokens_all_test %>% inner_join(get_afinn) %>% 
+  group_by(listing_id) %>% 
+  summarise(sentiment_affin = sum(value)) -> sentiment_affin_test
+
+sentiment_affin_test <- sentiment_affin_test %>% 
+  left_join(listing_id_avg_rating_test)
+
+# Loughran Dictionary
+tokens_all_test %>% inner_join(get_loughran) %>% 
+  count(sentiment,listing_id) %>% 
+  spread(sentiment,n) -> sentiments_loughran_test
+
+sentiments_loughran_test <- sentiments_loughran_test %>% 
+  left_join(listing_id_avg_rating_test) %>% 
+  mutate(sentiment_loughran = positive-negative) %>% 
+  dplyr::select(listing_id,avg_rating,sentiment_loughran,period) 
+
+test_data <- readRDS("test_data.rds")
+all_together_sentiments_listing_test <- data.frame()
+all_together_sentiments_listing_test <- bing_liu_sentiment_listing_test %>% 
+  left_join(emotions_nrc_test) 
+all_together_sentiments_listing_test <- all_together_sentiments_listing %>%
+  left_join(sentiment_affin_test)
+all_together_sentiments_listing_test <- all_together_sentiments_listing_test %>%
+  left_join(sentiments_loughran_test)
+all_together_sentiments_listing_test <- all_together_sentiments_listing_test %>%
+  na.omit()
+all_together_sentiments_listing_test <- unique(all_together_sentiments_listing_test)
+
+review_feature_final_rating_test_join <- review_feature_final_rating_test %>% left_join(test_data, by = "row") 
+review_feature_final_rating_test_join <- review_feature_final_rating_test_join %>% select(-c(1, 2, 16:23))
+review_feature_final_rating_test_join <- review_feature_final_rating_test_join %>% separate(listing_id, into = c("listing_id", "s"), sep = "_")
+review_feature_final_rating_test_join$s <- NULL
+review_feature_final_rating_test_join[,3:12] <- lapply(review_feature_final_rating_test_join[,3:12], as.integer)
+review_feature_final_rating_test_join <- review_feature_final_rating_test_join %>% group_by(listing_id) %>%
+                                          summarise(avg_rating = mean(review_scores_rating.x),
+                                                    price = mean(price.x),
+                                                    recommend_feature = sum(recommend),
+                                                    location_feature = sum(location),
+                                                    price_feature = sum(price_feature),
+                                                    stay_feature = sum(stay),
+                                                    host_feature = sum(host),
+                                                    clean_feature = sum(clean),
+                                                    communication_feature = sum(communication),
+                                                    availability_feature = sum(availability),
+                                                    check_feature = sum(check),
+                                                    easy_feature = sum(easy))
+dataset_knn_test <- review_feature_final_rating_test_join %>% left_join(all_together_sentiments_listing_test, by = "listing_id")
+dataset_knn_test$avg_rating.y <- NULL
+dataset_knn_test$period <- NULL
+dataset_knn_test$listing_id <- NULL
+dataset_knn_test[is.na(dataset_knn_test)] <- 0
+#dataset_knn_test[,2:26] <- scale(dataset_knn_test[,2:26])
+names(dataset_knn_test)[1] <- paste("rating")
+dataset_knn_test$rating <- round(dataset_knn_test$rating, 0)
+dataset_knn_test$rating <- as.factor(dataset_knn_test$rating)
+
+saveRDS(dataset_knn_test, "dataset_knn_test.rds")
+
+#Modelling with pre-pandemic dataset
+model_knn <- readRDS("model_knn.rds")
+
+set.seed(123)
+control <- trainControl(method="cv", number=10, classProbs= TRUE, summaryFunction = multiClassSummary)
+model_pre <- train(rating~., data = dataset_knn_pre, method = 'knn', trControl = trainControl(method = 'cv', number = 5), preProcess = c("center", "scale"))
+print(model_pre)
+
+saveRDS(model_pre, "model_pre.rds")
+
+#Evaluating
+predict_pre <- predict(model_pre, newdata = dataset_knn_test)
+saveRDS(predict_pre, "predict_pre.rds")
+
+#Confusion matrix
+knn_cm_pre <- table(dataset_knn_test$rating, predict_pre)
+confusionMatrix(knn_cm_pre)
+
+
+#Modelling with post-pandemic dataset
+model_post <- readRDS("model_post.rds")
+
+set.seed(123)
+model_post <- train(rating~., data = dataset_knn_post, method = 'knn', trControl = trainControl(method = 'cv', number = 5), preProcess = c("center", "scale"))
+print(model_post)
+
+saveRDS(model_post, "model_post.rds")
+
+#Evaluating
+predict_post <- predict(model_post, newdata = dataset_knn_test)
+saveRDS(predict_post, "predict_post.rds")
+
+#Confusion matrix
+knn_cm_post <- table(dataset_knn_test$rating, predict_post)
+confusionMatrix(knn_cm_post)
+
+#Comparing Models
+resample_results <- resamples(list(Pre=model_pre,Post=model_post))
+summary(resample_results)
+
+scales <- list(x = list(relation = "free"), y = list(relation = "free"))
+densityplot(resample_results , scales = scales, pch = "|")
+bwplot(resample_results , scales = scales)
+
+#significance testing models
+diffs <- diff(resample_results)
+summary(diffs)
+```
+
+
