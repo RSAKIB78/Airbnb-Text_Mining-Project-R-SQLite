@@ -1,0 +1,1206 @@
+---
+title: "Git"
+output: html_document
+date: '2022-12-03'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(purrr)
+library(data.table)
+library(RSQLite)
+library(tidyr)
+library(stringr)
+library(tidytext)
+library(udpipe)
+library(qdap)
+library(textstem)
+library(hunspell)
+library(stringi)
+library(future)
+library(ggridges)
+library(future.apply)
+library(gridExtra)
+library(grid)
+library(emmeans)
+library(usethis)
+library(kableExtra)
+```
+
+# Reading the review datasets from 16 cities
+```{r eval=FALSE}
+airbnb_reviews <- data.frame()
+
+all_reviews <- list.files("./InsideAirBnb/", pattern = "reviews", recursive = TRUE)
+
+airbnb_reviews <- lapply(all_reviews, function(x){
+  df <- fread(paste0("./InsideAirBnb/", x))
+  return(df)
+})
+
+airbnb_reviews <- lapply(airbnb_reviews, function(i) {
+    i$listing_id <- as.integer(i$listing_id)
+    i$id <- as.integer(i$id)
+    i$date <- as.Date(i$date, format = "%Y-%m-%d")
+    return(i)
+})
+
+airbnb_reviews <- rbindlist(airbnb_reviews, fill = TRUE)
+#saveRDS(airbnb_reviews, "airbnb_reviews.rds")
+#write.csv(airbnb_reviews, "airbnb_reviews.csv")
+```
+
+# Reading the listings datasets from 16 cities
+```{r eval=FALSE}
+airbnb_listings <- data.frame()
+
+all_listings <- list.files("./InsideAirBnb/", pattern = "listing", recursive = TRUE)
+
+airbnb_listings <- lapply(all_listings, function(x){
+  df <- fread(paste0("./InsideAirBnb/", x))
+  return(df)
+})
+
+airbnb_listings <- lapply(airbnb_listings, function(i) {
+    i$id <- as.integer(i$id)
+    return(i)
+})
+
+airbnb_listings <- rbindlist(airbnb_listings, fill = TRUE)
+saveRDS(airbnb_listings, "airbnb_listings.rds")
+write.csv(airbnb_listings, "airbnb_listings.csv")
+```
+
+# Reading the calendar datasets from 16 cities
+```{r eval=FALSE}
+airbnb_calendars <- data.frame()
+
+all_calendars <- list.files("./InsideAirBnb/", pattern = "calendar", recursive = TRUE)
+
+airbnb_calendars <- lapply(all_calendars, function(x){
+  df <- fread(paste0("./InsideAirBnb/", x))
+  return(df)
+})
+
+airbnb_calendars <- rbindlist(airbnb_calendars, fill = TRUE)
+saveRDS(airbnb_calendars, "airbnb_calendars.rds")
+fwrite(airbnb_calendars, "airbnb_calendars.csv")
+```
+
+#Loading the datasets to database
+```{r eval=FALSE}
+connection <- dbConnect(SQLite(), "airbnb.db")
+
+airdna_files <- list.files("./csv/")
+
+for (file in airdna_files) {
+  this_filepath <- paste0("./csv/",file)
+  this_file_contents <- fread(this_filepath)
+
+  table_name <- gsub(".csv","",file)
+  
+  RSQLite::dbWriteTable(connection,table_name,this_file_contents,overwrite=TRUE)
+  
+}
+dbListTables(connection)
+```
+
+#Creating datasets for listings during 2019-2022
+```{r eval=FALSE}
+airbnb_listings <- readRDS("./rds/airbnb_listings.rds")
+airbnb_listings <- dbGetQuery(connection, "SELECT id, name, description, neighborhood_overview, host_id, host_name, host_about, host_response_time, 
+       host_response_rate, host_acceptance_rate, host_is_superhost, host_listings_count, host_total_listings_count, 
+       host_has_profile_pic, host_identity_verified, neighbourhood, property_type, room_type, accommodates, instant_bookable,
+       bathrooms_text, bedrooms, beds, price, minimum_nights, has_availability, availability_30, availability_60, availability_90,
+       availability_365, number_of_reviews, number_of_reviews_ltm, number_of_reviews_l30d, review_scores_rating, review_scores_accuracy,
+       review_scores_cleanliness, review_scores_checkin, review_scores_communication, review_scores_location, review_scores_value
+FROM airbnb_listings
+GROUP BY id
+ORDER BY last_scraped DESC
+")
+fwrite(airbnb_listings, "airbnb_listings.csv")
+```
+
+# Creating datasets for reviews during 2019-2022
+```{r}
+airbnb_reviews <- readRDS("./rds/airbnb_reviews.rds")
+
+#Subsetting reviews by years
+reviews_2022 <- airbnb_reviews[(airbnb_reviews$date >= "2022-01-01" & airbnb_reviews$date <= "2022-12-31"),]
+reviews_2021 <- airbnb_reviews[(airbnb_reviews$date >= "2021-01-01" & airbnb_reviews$date <= "2021-12-31"),]
+reviews_2020 <- airbnb_reviews[(airbnb_reviews$date >= "2020-01-01" & airbnb_reviews$date <= "2020-12-31"),]
+reviews_2019 <- airbnb_reviews[(airbnb_reviews$date >= "2019-01-01" & airbnb_reviews$date <= "2019-12-31"),]
+
+#Taking samples
+airbnb_reviews_2019 <- sample_n(reviews_2019, 150000)
+airbnb_reviews_2020 <- sample_n(reviews_2020, 150000)
+airbnb_reviews_2021 <- sample_n(reviews_2021, 150000)
+airbnb_reviews_2022 <- sample_n(reviews_2022, 150000)
+
+#Creating backups
+fwrite(airbnb_reviews_2019, "reviews_2019.csv")
+fwrite(airbnb_reviews_2020, "reviews_2020.csv")
+fwrite(airbnb_reviews_2021, "reviews_2021.csv")
+fwrite(airbnb_reviews_2022, "reviews_2022.csv")
+```
+
+# Reading all the csv
+```{r}
+airbnb_calendars <- fread("./csv/airbnb_calendars.csv", na.strings = c("", " ", "N/A"))
+airbnb_reviews_2019 <- fread("./database_extracts/reviews_2019.csv", na.strings = c("", " ", "N/A"))
+airbnb_reviews_2020 <- fread("./database_extracts/reviews_2020.csv", na.strings = c("", " ", "N/A"))
+airbnb_reviews_2021 <- fread("./database_extracts/reviews_2021.csv", na.strings = c("", " ", "N/A"))
+airbnb_reviews_2022 <- fread("./database_extracts/reviews_2022.csv", na.strings = c("", " ", "N/A"))
+airbnb_listings <- fread("./database_extracts/airbnb_listings.csv", na.strings = c("", " ", "N/A"))
+```
+
+# Combining to get master datasets
+```{r}
+airbnb_reviews_2019_2022 <- rbind(airbnb_reviews_2019, airbnb_reviews_2020, airbnb_reviews_2021, airbnb_reviews_2022)
+saveRDS(airbnb_reviews_2019_2022, "airbnb_reviews_2019_2022.rds")
+airbnb_reviews_2019_2022 <- readRDS("airbnb_reviews_2019_2022.rds")
+airbnb_reviews_2019_2022$row <- 1:nrow(airbnb_reviews_2019_2022)
+airbnb_reviews_2019_2022 <- airbnb_reviews_2019_2022 %>% select(7,1,3,4,5,6)
+all_reviews_listings <- left_join(airbnb_reviews_2019_2022, airbnb_listings, by = c("listing_id" = "id"))
+saveRDS(all_reviews_listings, "all_reviews_listings.rds")
+```
+
+# Normalising all_reviews_listings
+```{r}
+all_reviews_listings <- readRDS("all_reviews_listings.rds")
+#Removing duplicates
+all_reviews_listings <- distinct(all_reviews_listings)
+
+# Seperating dates
+all_reviews_listings[, "year"] <- as.integer(format(all_reviews_listings[,"date"], "%Y"))
+all_reviews_listings[, "month"] <- as.integer(format(all_reviews_listings[,"date"], "%m"))
+all_reviews_listings <- all_reviews_listings %>% filter(year %in% c(2019, 2020, 2021, 2022))
+all_reviews_listings$month_year <- format(all_reviews_listings$date, "%Y-%m")
+
+# host_location
+all_reviews_listings <- all_reviews_listings %>% separate(neighbourhood, c("city", "province", "country"), sep = ", ")
+all_reviews_listings <- all_reviews_listings[!is.na(all_reviews_listings$city),]
+all_reviews_listings <- all_reviews_listings %>% filter(str_detect(city, regex("Amsterdam|Bangkok|Barcelona|Kong|Istanbul|London| Melbourne|York|Paris|Porto|Rome|Francisco|Singapore|Sydney|Madrid|Vienna", ignore.case = TRUE)))
+all_reviews_listings <- all_reviews_listings %>% mutate(city = case_when(
+                                                                          str_detect(city, "Amsterdam") ~ "Amsterdam",
+                                                                          str_detect(city, "Bangkok") ~ "Bangkok",
+                                                                          str_detect(city, "Barcelona") ~ "Barcelona",
+                                                                          str_detect(city, "Hong Kong") ~ "Hong Kong",
+                                                                          str_detect(city, "Istanbul") ~ "Istanbul",
+                                                                          str_detect(city, "London") ~ "London",
+                                                                          str_detect(city, "Melbourne") ~ "Melbourne",
+                                                                          str_detect(city, "New York") ~ "New York",
+                                                                          str_detect(city, "Paris") ~ "Paris",
+                                                                          str_detect(city, "Porto") ~ "Porto",
+                                                                          str_detect(city, "Rome") ~ "Rome",
+                                                                          str_detect(city, "San Francisco") ~ "San Francisco",
+                                                                          str_detect(city, "Singapore") ~ "Singapore",
+                                                                          str_detect(city, "Sydney") ~ "Sydney",
+                                                                          str_detect(city, "Madrid") ~ "Madrid",
+                                                                          str_detect(city, "Vienna") ~ "Vienna",
+                                                                          TRUE ~ city))
+all_reviews_listings$city <- str_replace(all_reviews_listings$city, "New-York", "New York")
+
+all_reviews_listings <- all_reviews_listings %>% mutate(country = case_when(
+                                                                          str_detect(city, "Amsterdam") ~ "Netherlands",
+                                                                          str_detect(city, "Bangkok") ~ "Thailand",
+                                                                          str_detect(city, "Barcelona") ~ "Spain",
+                                                                          str_detect(city, "Hong Kong") ~ "Hong Kong",
+                                                                          str_detect(city, "Istanbul") ~ "Turkey",
+                                                                          str_detect(city, "London") ~ "UK",
+                                                                          str_detect(city, "Melbourne") ~ "Australia",
+                                                                          str_detect(city, "New York") ~ "USA",
+                                                                          str_detect(city, "Paris") ~ "France",
+                                                                          str_detect(city, "Porto") ~ "Portugal",
+                                                                          str_detect(city, "Rome") ~ "Italy",
+                                                                          str_detect(city, "San Francisco") ~ "USA",
+                                                                          str_detect(city, "Singapore") ~ "Singapore",
+                                                                          str_detect(city, "Sydney") ~ "Australia",
+                                                                          str_detect(city, "Madrid") ~ "Spain",
+                                                                          str_detect(city, "Vienna") ~ "Austria",
+                                                                          TRUE ~ country))
+all_reviews_listings$city <- as.factor(all_reviews_listings$city)
+all_reviews_listings$country <- as.factor(all_reviews_listings$country)
+all_reviews_listings <- all_reviews_listings %>% dplyr::select(-"province")
+
+#Host_response_time
+all_reviews_listings$host_response_time <- as.factor(all_reviews_listings$host_response_time)
+all_reviews_listings$host_response_time <- factor(all_reviews_listings$host_response_time, levels = c("within an hour", "within a few hours", "within a day", "a few days or more"))
+levels(all_reviews_listings$host_response_time)
+
+#Replacing strings
+all_reviews_listings$host_response_rate <- str_replace(all_reviews_listings$host_response_rate, "%", "")
+all_reviews_listings$host_acceptance_rate <- str_replace(all_reviews_listings$host_acceptance_rate, "%", "")
+
+#Bathrooms
+all_reviews_listings$bathrooms_text <- str_replace(all_reviews_listings$bathrooms_text, "baths", "bath")
+all_reviews_listings$bathrooms_text <- str_replace(all_reviews_listings$bathrooms_text, "bath", "")
+all_reviews_listings <- all_reviews_listings %>% separate(bathrooms_text, c("bathrooms", "bathroom_type"), sep = " ")
+
+#Dealing with NA. Converted everything to NA
+all_reviews_listings <- all_reviews_listings %>% mutate_all(na_if, "")
+
+#Price
+all_reviews_listings$price <- str_replace(all_reviews_listings$price, "\\$", "")
+all_reviews_listings$price <- as.numeric(all_reviews_listings$price)
+
+#COVID Period identification
+all_reviews_listings <- all_reviews_listings %>% mutate(period = ifelse(date < "2020-04-01", "Before Pandemic", "After Pandemic"))
+all_reviews_listings$period <- factor(all_reviews_listings$period, levels = c("Before Pandemic", "After Pandemic"))
+
+#Combining listings with period
+all_reviews_listings$listing_id <- paste(all_reviews_listings$listing_id, sep = "_", all_reviews_listings$period)
+all_reviews_listings <- all_reviews_listings %>% mutate(period = ifelse(date < "2020-04-01", "Before Pandemic", "After Pandemic"))
+all_reviews_listings$period <- factor(all_reviews_listings$period, levels = c("Before Pandemic", "After Pandemic"))
+
+#Getting occupancy rates
+airbnb_calendars$price <- str_replace(airbnb_calendars$price, "\\$", "")
+airbnb_calendars$price <- as.integer(airbnb_calendars$price)
+airbnb_calendars$occupied <- ifelse(airbnb_calendars$available=="t", 1, 0)
+airbnb_calendars$month_year <- format(airbnb_calendars$date, "%Y-%m")
+all_calendars <- airbnb_calendars %>% group_by(listing_id, month_year) %>% summarise(occupancy_rate = sum(occupied)/n(),
+                                                                                     avg_price = mean(price))
+all_calendars <- all_calendars %>% mutate(period = ifelse(month_year < "2020-04", "Before Pandemic", "After Pandemic"))
+
+na_rows <- which(is.na(all_reviews_listings$comments))
+all_reviews_listings <- all_reviews_listings[-na_rows,]
+na_rows <- which(is.na(all_reviews_listings$price))
+all_reviews_listings <- all_reviews_listings[-na_rows,]
+
+
+colSums((is.na(all_reviews_listings)))
+all_reviews_listings <- all_reviews_listings[, -c(13,14,15,19,27,28,29,30)]
+
+#saveRDS(all_reviews_listings, "all_reviews_listings.rds")
+#saveRDS(all_calendars, "all_calendars.rds")
+```
+
+# Getting test dataset for reviews of 2022
+```{r}
+test_data <- all_reviews_listings[all_reviews_listings$date >= "2022-01-01",]
+saveRDS(test_data, "test_data.rds")
+```
+
+#Getting Covid Data
+```{r}
+#Reading the dataset
+covid_data <- read_csv("WHO-COVID-19-global-data.csv")
+
+#Filtering
+countries <- c("Thailand", "Spain", "Hong Kong", "Turkey", "The United Kingdom", "Australia", "United States of America", "Singapore", "Austria", "Netherlands", "France", "Portugal", "Italy")
+covid_data <- covid_data %>% filter(Country %in% countries)
+covid_data <- covid_data[(covid_data$Date_reported >= "2019-01-01" & covid_data$Date_reported <= "2021-12-31"),]
+covid_data <- covid_data %>% filter(New_cases >= 0)
+
+#Formatting the data
+covid_data$Country <- as.factor(covid_data$Country) 
+levels(covid_data$Country)
+str(covid_data)
+
+#Visualizing the data
+ggplot(covid_data, aes(Date_reported, New_cases, color = Country)) + geom_point() + geom_line() + geom_hline(yintercept = 0)
+```
+
+# Normalizing all_listings_calendars
+```{r}
+#COVID Period identification
+airbnb_calendars <- airbnb_calendars %>% mutate(period = ifelse(date < "2020-04-01", "Before Pandemic", "After Pandemic"))
+airbnb_calendars$period <- factor(airbnb_calendars$period, levels = c("Before Pandemic", "After Pandemic"))
+
+#Combining listings with period
+airbnb_calendars$listing_id <- str_c(airbnb_calendars$listing_id, "_", airbnb_calendars$period)
+airbnb_calendars <- airbnb_calendars %>% mutate(period = ifelse(date < "2020-04-01", "Before Pandemic", "After Pandemic"))
+airbnb_calendars$period <- factor(airbnb_calendars$period, levels = c("Before Pandemic", "After Pandemic"))
+
+#Combining with master dataset
+listings <- all_reviews_listings %>% select(listing_id) %>% distinct(.)
+all_listings_calendars <- left_join(listings, airbnb_calendars, by = "listing_id")
+
+#Date
+all_listings_calendars[, "year"] <- format(all_listings_calendars[,"date"], "%Y")
+all_listings_calendars[, "month"] <- format(all_listings_calendars[,"date"], "%m")
+
+#Prices
+all_listings_calendars$price <- str_replace(all_listings_calendars$price, "\\$", "")
+all_listings_calendars$price <- as.numeric(all_listings_calendars$price)
+
+all_listings_calendars$adjusted_price <- str_replace(all_listings_calendars$adjusted_price, "\\$", "")
+all_listings_calendars$adjusted_price <- as.numeric(all_listings_calendars$adjusted_price)
+
+#Getting occupancy rates
+airbnb_calendars$price <- str_replace(airbnb_calendars$price, "\\$", "")
+airbnb_calendars$price <- as.integer(airbnb_calendars$price)
+airbnb_calendars$occupied <- ifelse(airbnb_calendars$available=="t", 1, 0)
+airbnb_calendars$month_year <- format(airbnb_calendars$date, "%Y-%m")
+all_calendars <- airbnb_calendars %>% group_by(listing_id, month_year) %>% summarise(occupancy_rate = sum(occupied)/n(),
+                                                                                     avg_price = mean(price))
+all_calendars <- all_calendars %>% mutate(period = ifelse(month_year < "2020-04", "Before Pandemic", "After Pandemic"))
+
+saveRDS(all_listings_calendars, "all_listings_calendars.rds")
+```
+
+#Processing for test data
+```{r}
+test_data <- readRDS("test_data.rds")
+test_data <- test_data %>% dplyr::select(row, listing_id, review_scores_rating, price, month_year, comments, period, city)
+
+#Replacing the digits with empty space
+test_data$comments <- gsub('[[:digit:]]+',' ', test_data$comments)
+
+#Replacing the punctuations with empty space
+test_data$comments <- gsub('[[:punct:]]+',' ', test_data$comments)
+
+#Additional cleaning
+test_data$comments <- bracketX(test_data$comments)
+test_data$comments <- replace_contraction(test_data$comments)
+test_data$comments <- replace_symbol(test_data$comments)
+
+# Remove spaces and newlines
+test_data$comments <- gsub("\n", " ", test_data$comments)
+test_data$comments <- gsub("^\\s+", "", test_data$comments)
+test_data$comments <- gsub("\\s+$", "", test_data$comments)
+test_data$comments <- gsub("[ |\t]+", " ", test_data$comments) #spaces
+
+#Getting the character lengths
+test_data$char_length <- nchar(test_data$comments)
+
+#Plotting the lengths 
+hist(test_data$char_length, breaks = 300, main = "Review Lengths")
+
+#Filtering for minimum length of 100
+test_data <- test_data %>% filter(char_length>100)
+hist(test_data$char_length,breaks = 300,main = "Review Length -Left trim to 100")
+
+#Filtering for maximum length of 1400
+test_data <- test_data %>% filter(char_length<1200)
+hist(test_data$char_length,breaks = 300,main = "Review Length(All) -Right trim to 1000")
+
+#Cleaning the language of the reviews
+test_data$comments <- iconv(test_data$comments)
+test_data$language <- cld2::detect_language(test_data$comments)
+test_data %>% filter(language =="en") -> test_data_en
+saveRDS(test_data_en, "test_data_en.rds")
+```
+
+# Getting the english texts
+```{r}
+all_reviews_listings <- readRDS("all_reviews_listings.rds")
+review_data <- all_reviews_listings %>% dplyr::select(row, listing_id, review_scores_rating, month_year, comments, description,
+                                               neighborhood_overview, host_about, period, city)
+
+#Replacing the digits with empty space
+review_data$comments <- gsub('[[:digit:]]+',' ', review_data$comments)
+
+#Replacing the punctuations with empty space
+review_data$comments <- gsub('[[:punct:]]+',' ', review_data$comments)
+
+#Additional cleaning
+review_data$comments <- bracketX(review_data$comments)
+review_data$comments <- replace_contraction(review_data$comments)
+review_data$comments <- replace_symbol(review_data$comments)
+
+# Remove spaces and newlines
+review_data$comments <- gsub("\n", " ", review_data$comments)
+review_data$comments <- gsub("^\\s+", "", review_data$comments)
+review_data$comments <- gsub("\\s+$", "", review_data$comments)
+review_data$comments <- gsub("[ |\t]+", " ", review_data$comments) #spaces
+
+#Getting the character lengths
+review_data$char_length <- nchar(review_data$comments)
+
+#Plotting the lengths 
+hist(review_data$char_length, breaks = 300, main = "Review Lengths")
+
+#Filtering for minimum length of 100
+review_data <- review_data %>% filter(char_length>100)
+hist(review_data$char_length,breaks = 300,main = "Review Length -Left trim to 100")
+
+#Filtering for maximum length of 1400
+review_data <- review_data %>% filter(char_length<1200)
+hist(review_data$char_length,breaks = 300,main = "Review Length(All) -Right trim to 1000")
+
+#Cleaning the language of the reviews
+review_data$comments <- iconv(review_data$comments)
+review_data$language <- cld2::detect_language(review_data$comments)
+review_data %>% filter(language =="en") -> review_data_en
+```
+
+# Getting listing description and cleaning
+```{r}
+#Replacing the digits with empty space
+review_data_en$description <- gsub('[[:digit:]]+',' ', review_data_en$description)
+
+#Replacing the punctuations with empty space
+review_data_en$description <- gsub('[[:punct:]]+',' ', review_data_en$description)
+
+#Additional cleaning
+review_data_en$description <- bracketX(review_data_en$description)
+review_data_en$description <- replace_contraction(review_data_en$description)
+review_data_en$description <- replace_symbol(review_data_en$description)
+
+# Remove spaces and newlines
+review_data_en$description <- gsub("\n", " ", review_data_en$description)
+review_data_en$description <- gsub("^\\s+", "", review_data_en$description)
+review_data_en$description <- gsub("\\s+$", "", review_data_en$description)
+review_data_en$description <- gsub("[ |\t]+", " ", review_data_en$description) #spaces
+
+#Lemmatizing
+lemma <- review_data_en %>% dplyr::select(listing_id, description) %>% distinct(.)
+lemma <- lemma %>% unnest_tokens(word, description)
+lemma$word <- lemmatize_words(lemma$word)
+lemma <- lemma %>% group_by(listing_id) %>% summarise(description = paste(word, collapse = " "))
+review_data_en$description <- NULL
+review_data_en <- review_data_en %>% left_join(lemma)
+
+#Cleaning the language
+review_data_en$description <- iconv(review_data_en$description)
+review_data_en$desc_language <- cld2::detect_language(review_data_en$description)
+review_data_en %>% filter(desc_language =="en") -> review_data_en
+```
+
+# Checking for spelling mistakes
+```{r eval=FALSE}
+#Getting the reviews column
+reviews <- review_data_en %>% arrange(row) %>% dplyr::select(row,comments)
+
+#Tokenizing the reviews
+tokens_for_spellcheck <- unnest_tokens(reviews,word,comments)
+
+#Getting the unique words
+unique_words <- unique(tokens_for_spellcheck$word)
+head(unique_words)
+length(unique_words)
+
+#Finding the misspelled words
+mispells <- hunspell(unique_words)
+
+#Getting the unique spelling mistake
+mispells <- unique(unlist(mispells))
+length(mispells)
+
+#Getting correct word suggestions
+suggestive_words <- hunspell_suggest(mispells)
+suggestive_words <- unlist(lapply(suggestive_words, function(x) x[1]))
+head(suggestive_words)
+mistakes.list <- as.data.frame(cbind(mispells,suggestive_words))
+freq_mistake <- count(tokens_for_spellcheck,word)
+freq_mistake <- inner_join(freq_mistake, mistakes.list, by = c("word" = "mispells"))
+words_suggestion<-arrange(freq_mistake,desc(n))
+word_NA <- words_suggestion %>% filter(is.na(suggestive_words))
+
+#Manually dealing with the spelling suggestions
+#write.csv(words_suggestion,"words_suggestion.csv")
+#write.csv(word_NA,"word_NA.csv")
+
+#Reading the prepared data
+words_suggestion <- read.csv("words_suggestion.csv")
+words_suggestion <- words_suggestion %>% dplyr::select(-X) %>% na.omit()
+word_NA <- read.csv("word_NA.csv")
+word_NA <- word_NA %>% dplyr::select(-X) %>% na.omit()
+
+words_suggestions <- rbind(words_suggestion,word_NA)
+
+words_suggestions <- arrange(words_suggestions)
+sum(is.na(words_suggestions))
+
+#Saving the final data
+#write.csv(words_suggestions, "words_suggestions.csv")
+
+#Replacing the mistakes words with suggestive ones
+word.list <- read.csv("words_suggestions.csv", stringsAsFactors = FALSE)
+mistake.words <- paste0(" ", word.list$word, " ")
+correct.words <- paste0(" ", word.list$suggestive_words, " ")
+
+mistake.replace <- function(df) {
+ df$comments <- stri_replace_all_regex(df$comments, mistake.words, correct.words, vectorize_all = FALSE)
+ return(df)
+}
+
+#Defining the number of cores
+ncores <- 6L
+plan(multiprocess, workers = ncores)
+
+# split comments based on available cores
+corpus_splitted <- split(reviews, seq(1, nrow(reviews), by=5))
+reviews <- future_lapply(corpus_splitted, mistake.replace)
+reviews <- rbindlist(reviews)
+reviews <- as.data.frame(reviews)
+reviews <- reviews %>% arrange(row)
+
+#Creating a backup of the correct reviews
+saveRDS(reviews, "spell_mistake_correction.rds")
+
+#Replacing the reviews with the corrected reviews
+review_data_en$comments <- reviews$comments
+
+#Creating a backup
+#saveRDS(review_data_en, "review_data_en.rds")
+```
+
+# Tokenizing reviews by listings
+```{r}
+review_data_en <- readRDS("review_data_en.rds")
+
+#Grouping the reviews by listings
+review_data_by_listings <- review_data_en %>%
+ unnest_tokens(word,comments)%>%
+ group_by(listing_id, month_year) %>%
+ summarise(grouped_reviews = paste(word,collapse = " "))
+
+saveRDS(review_data_by_listings, "review_data_by_listings.rds")
+
+#Splitting the dataset
+split_size <- 100
+
+tokens_list <- split(review_data_by_listings,
+                      rep(1:ceiling(nrow(review_data_by_listings)/split_size),
+                      each=split_size,
+                      length.out=nrow(review_data_by_listings)))
+
+# Tokenization
+review_tokens_by_listings <- data.frame()
+
+for(i in 1:length(tokens_list)){
+      review_tokens <- tokens_list[[i]] %>%
+      unnest_tokens(word,grouped_reviews) %>%
+      count(word,listing_id) %>%
+      anti_join(stop_words)
+      print(i)
+ 
+      review_tokens_by_listings <- bind_rows(review_tokens_by_listings,review_tokens)
+}
+
+#Lemmatizing the tokens
+review_tokens_by_listings$word <- lemmatize_words(review_tokens_by_listings$word)
+```
+
+# Filtering tokens
+```{r}
+#Finding the token lengths
+review_tokens_by_listings$token_length <- nchar(review_tokens_by_listings$word)
+
+#Checking the distribution of the lengths
+view(review_tokens_by_listings %>% group_by(token_length) %>% summarise(total =n()))
+
+#Removing the short tokens
+review_tokens_by_listings <- review_tokens_by_listings %>% filter(token_length > 2)
+
+#Checking the longest tokens
+view(review_tokens_by_listings %>% group_by(token_length) %>% summarise(total =n()) %>% arrange(desc(token_length)))
+
+#Removing excessively long tokens
+review_tokens_by_listings <- review_tokens_by_listings %>% filter(token_length<=15)
+
+#Creating backups
+#saveRDS(review_data_by_listings, "review_data_by_listings.rds")
+
+#Getting the frequency of each token
+review_tokens_by_listings <- review_tokens_by_listings %>% count(listing_id, word, sort = TRUE)
+get_rating <- review_data_en %>% dplyr::select(., c(2, 3)) %>% distinct(listing_id, review_scores_rating)
+review_tokens_by_listings <- review_tokens_by_listings %>% left_join(get_rating)
+total_words <- review_tokens_by_listings %>% 
+                group_by(word) %>% 
+                 dplyr::summarize(total = sum(n))
+review_tokens_by_listings <- review_tokens_by_listings %>% left_join(total_words)
+
+#Calculating tf_idf of the tokens
+review_tf_idf_by_listings <- review_tokens_by_listings %>% count(listing_id, word) %>%
+                             bind_tf_idf(word,listing_id,n) %>% group_by(word) %>% arrange(desc(tf-idf))
+
+#Checking the tf-idf distribution
+hist(review_tf_idf_by_listings$tf_idf,breaks = 200,main="TF-IDF plot")
+
+#Taking the cut-off value from histogram
+review_tf_idf_by_listings <- review_tf_idf_by_listings %>% 
+                             filter(tf_idf < 0.6)
+hist(review_tf_idf_by_listings$tf_idf,breaks = 400,main="TF-IDF plot")
+
+review_tf_idf_by_listings <- review_tf_idf_by_listings %>% 
+                             filter(tf_idf < 0.5)
+hist(review_tf_idf_by_listings$tf_idf,breaks = 400,main="TF-IDF plot")
+
+review_tf_idf_by_listings <- review_tf_idf_by_listings %>% 
+                             filter(tf_idf > 0.05)
+hist(review_tf_idf_by_listings$tf_idf,breaks = 400,main="TF-IDF plot")
+
+review_tf_idf_by_listings %>% group_by(word) %>%
+                              summarise(total =n()) %>%
+                              arrange(desc(total)) %>%
+                              top_n(50)
+
+saveRDS(review_tf_idf_by_listings, "review_tf_idf_by_listings.rds")
+```
+
+#Checking distribution
+```{r}
+all_reviews_listings <- readRDS("all_reviews_listings.rds")
+
+all_reviews_listings %>% gather(Attributes, value, c(14,15,21,23,24,26:39)) %>%
+  ggplot(aes(value, fill = Attributes)) + 
+  geom_histogram(color = "black", show.legend = FALSE) +
+  facet_wrap(~Attributes, scales = "free_x") + 
+  labs(x = "Values", y = "Frequency", title = "Airbnb Metadata - Histograms")
+  theme_bw()
+
+#Distribution of reviews
+ggplot(all_reviews_listings, aes(date, number_of_reviews_ltm)) + 
+             geom_col() +
+             geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") +
+             labs(x = "Number of reviews", y = "Count", title = "Distribution of number of reviews listings have in last 30 days")
+
+#Distribution of reviews by country
+ggplot(all_reviews_listings, aes(date, number_of_reviews_ltm, fill = country)) + 
+             geom_col() +
+             geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") +
+             labs(x = "Number of reviews", y = "Count", title = "Distribution of number of reviews listings have in last 30 days by Country") +
+             facet_grid(country~.)
+
+#Distribution of superhosts
+grid.arrange(ggplot(all_reviews_listings, aes(host_is_superhost)) + 
+             geom_bar() +
+             labs(x = "Superhost", y = "Count", title = "Number of Superhosts") +
+             facet_wrap(~period),
+
+#Distributions of room types
+             ggplot(all_reviews_listings, aes(room_type)) + 
+             geom_bar() +
+             labs(x = "Room Type", y = "Count", title = "Count of Room types"),
+
+#Distributions of instantly bookable listings
+             ggplot(all_reviews_listings, aes(instant_bookable)) + 
+             geom_bar() +
+             labs(x = "Instant Bookable", y = "Count", title = "Count of Instantly Bookable Listings") +
+             facet_wrap(~period),
+             ggplot(all_reviews_listings, aes(period)) + 
+             geom_bar() +
+             labs(x = "Period", y = "Count", title = "Count of review from each period")
+)
+```
+
+* Checking for correlation between rating accuracy and review lengths
+```{r}
+#Finding the review lengths
+corr_data_1 <- all_reviews_listings %>%
+               mutate(review_length = str_count(comments)) %>%
+               group_by(listing_id) %>%
+               mutate(average_review_length = mean(review_length),
+                      mean_rating = mean(review_scores_rating),
+                      mean_cleanliness = mean(review_scores_cleanliness),
+                      mean_accuracy = mean(review_scores_accuracy),
+                      mean_checkin = mean(review_scores_checkin),
+                      mean_communication = mean(review_scores_communication),
+                      mean_location = mean(review_scores_location),
+                      mean_value = mean(review_scores_value)) %>%
+               ungroup()
+
+#Plotting
+grid.arrange((corr_data_1 %>% ggplot(aes(x=average_review_length,
+                           y=mean_rating)) +
+                geom_point(alpha=0.2) +
+                geom_smooth(method="lm") +
+                ggtitle("Rating scores vs length of reviews")),
+
+(corr_data_1 %>% ggplot(aes(x=average_review_length,
+                           y=mean_cleanliness)) +
+                geom_point(alpha=0.2) +
+                geom_smooth(method="lm") +
+                ggtitle("Cleanliness scores vs length of reviews")),
+
+(corr_data_1 %>% ggplot(aes(x=average_review_length,
+                           y=mean_accuracy)) +
+                geom_point(alpha=0.2) +
+                geom_smooth(method="lm") +
+                ggtitle("Accuracy scores vs length of reviews")),
+
+(corr_data_1 %>% ggplot(aes(x=average_review_length,
+                           y=mean_checkin)) +
+                geom_point(alpha=0.2) +
+                geom_smooth(method="lm") +
+                ggtitle("Checkin scores vs length of reviews")),
+
+(corr_data_1 %>% ggplot(aes(x=average_review_length,
+                           y=mean_communication)) +
+                geom_point(alpha=0.2) +
+                geom_smooth(method="lm") +
+                ggtitle("Communication scores vs length of reviews")),
+
+(corr_data_1 %>% ggplot(aes(x=average_review_length,
+                           y=mean_location)) +
+                geom_point(alpha=0.2) +
+                geom_smooth(method="lm") +
+                ggtitle("Location scores vs length of reviews")),
+
+(corr_data_1 %>% ggplot(aes(x=average_review_length,
+                           y=mean_value)) +
+                geom_point(alpha=0.2) +
+                geom_smooth(method="lm") +
+                ggtitle("Rating value scores vs length of reviews")))
+```
+
+# Correlation between ratings and country (review)
+```{r}
+countries <- all_reviews_listings %>%
+                  mutate(country = as.factor(country)) %>%
+                  group_by(date, country) %>%
+                  summarise(mean_rating = mean(review_scores_rating),
+                            frequency = n())
+#Plotting 
+countries %>% ggplot(aes(x = date,
+                              y = mean_rating, fill = country)) +
+              geom_jitter() + geom_line() + geom_smooth() + facet_wrap(~country) +
+              ggtitle("Rating scores vs Country of Reviewer") +
+              geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") +
+              theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+#Creating linear model
+by_country.lm <- lm(review_scores_rating ~ period, all_reviews_listings)
+
+#Extracting means and 95% confidence intervals
+by_country.emm <- emmeans(by_country.lm, ~period)
+kable(by_country.emm, caption = "Mean scores and 95% CIs ")
+
+#Estimating the differences between means
+by_country.constrast <- confint(pairs(by_country.emm, reverse = TRUE))
+kable(by_country.constrast, caption = "Differences between the mean scores before and after the pandemic")
+
+#Visualizing the estimations
+avg.entire_homes <- grid.arrange(
+                 ggplot(summary(by_country.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Ratings", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="Ratings before and after the pandemic"),
+                 
+                 ggplot(by_country.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Ratings", 
+                        subtitle="Error bars are 95% CIs", title="Ratings before and after the pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+
+```
+
+# Observing ratings for room types over the years
+```{r}
+by_room_type <- all_reviews_listings %>%
+                  group_by(room_type, date) %>%
+                  summarise(mean_rating = mean(review_scores_rating))
+
+#Plotting
+ggplot(by_room_type, aes(date, mean_rating)) + 
+             geom_point() + geom_smooth(method = lm) + facet_wrap(~room_type) +
+             geom_vline(xintercept = as.Date("2020-03-31"), color = "Green") +
+             labs(x = "Year", y = "Rating", title = "Distribution of ratings by room types over the years")
+```
+
+#Contrasting ratings by period for entire homes
+```{r}
+entire_homes <- all_reviews_listings %>% filter(room_type == "Entire home/apt")
+
+#Creating linear model
+entire_homes.lm <- lm(review_scores_rating ~ period, entire_homes)
+
+#Extracting means and 95% confidence intervals
+entire_homes.emm <- emmeans(entire_homes.lm, ~period)
+kable(entire_homes.emm, caption = "Mean scores and 95% CIs ")
+
+#Estimating the differences between means
+entire_homes.constrast <- confint(pairs(entire_homes.emm, reverse = TRUE))
+kable(entire_homes.constrast, caption = "Differences between the mean scores before and after the pandemic")
+
+#Visualizing the estimations
+avg.entire_homes <- grid.arrange(
+                 ggplot(summary(entire_homes.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Ratings", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="Ratings for Entire home/apt before and after the pandemic"),
+                 
+                 ggplot(entire_homes.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Ratings", 
+                        subtitle="Error bars are 95% CIs", title="Ratings for Entire home/apt before and after the pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+```
+
+#Contrasting ratings by period for private room
+```{r}
+private <- all_reviews_listings %>% filter(room_type == "Private room")
+
+#Creating linear model
+private.lm <- lm(review_scores_rating ~ period, private)
+
+#Extracting means and 95% confidence intervals
+private.emm <- emmeans(private.lm, ~period)
+kable(private.emm, caption = "Mean scores and 95% CIs ")
+
+#Estimating the differences between means
+private.constrast <- confint(pairs(private.emm, reverse = TRUE))
+kable(private.constrast, caption = "Differences between the mean scores before and after the pandemic")
+
+#Visualizing the estimations
+avg.private <- grid.arrange(
+                 ggplot(summary(private.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Ratings", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="Ratings for Private rooms before and after the pandemic"),
+                 
+                 ggplot(private.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Ratings", 
+                        subtitle="Error bars are 95% CIs", title="Ratings for Private rooms before and after the pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+```
+
+#Contrasting ratings by period for hotels
+```{r}
+hotel <- all_reviews_listings %>% filter(room_type == "Hotel room")
+
+#Creating linear model
+hotel.lm <- lm(review_scores_rating ~ period, hotel)
+
+#Extracting means and 95% confidence intervals
+hotel.emm <- emmeans(hotel.lm, ~period)
+kable(hotel.emm, caption = "Mean scores and 95% CIs ")
+
+#Estimating the differences between means
+hotel.constrast <- confint(pairs(hotel.emm, reverse = TRUE))
+kable(hotel.constrast, caption = "Differences between the mean scores before and after the pandemic")
+
+#Visualizing the estimations
+avg.hotel <- grid.arrange(
+                 ggplot(summary(hotel.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Ratings", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="Ratings for Hotel rooms before and after the pandemic"),
+                 
+                 ggplot(hotel.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Ratings", 
+                        subtitle="Error bars are 95% CIs", title="Ratings for Hotel rooms before and after the pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+```
+
+#Contrasting ratings by period for shared rooms
+```{r}
+shared <- all_reviews_listings %>% filter(room_type == "Shared room")
+
+#Creating linear model
+shared.lm <- lm(review_scores_rating ~ period, shared)
+
+#Extracting means and 95% confidence intervals
+shared.emm <- emmeans(shared.lm, ~period)
+kable(shared.emm, caption = "Mean scores and 95% CIs ")
+
+#Estimating the differences between means
+shared.constrast <- confint(pairs(shared.emm, reverse = TRUE))
+kable(shared.constrast, caption = "Differences between the mean scores before and after the pandemic")
+
+#Visualizing the estimations
+avg.shared <- grid.arrange(
+                 ggplot(summary(shared.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Ratings", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="Ratings for Shared rooms before and after the pandemic"),
+                 
+                 ggplot(shared.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Ratings", 
+                        subtitle="Error bars are 95% CIs", title="Ratings for Shared rooms before and after the pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+```
+
+# All room type estimation contrasts
+```{r}
+grid.arrange(avg.entire_homes, avg.hotel, avg.private, avg.shared, nrow = 4)
+```
+
+# Checking for difference in minimum_nights before and after pandemic
+```{r}
+#Creating linear model
+nights.lm <- lm(minimum_nights ~ period, all_reviews_listings)
+
+#Extracting means and 95% confidence intervals
+nights.emm <- emmeans(nights.lm, ~period)
+kable(nights.emm, caption = "Mean scores and 95% CIs ")
+
+#Estimating the differences between means
+nights.constrast <- confint(pairs(nights.emm, reverse = TRUE))
+kable(nights.constrast, caption = "Differences between the mean scores before the pandemic")
+
+#Visualizing the estimations
+avg.nights <- grid.arrange(
+                 ggplot(summary(nights.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Minimum Nights", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="Minimum nights before and after the pandemic"),
+                 
+                 ggplot(nights.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Minimum Nights", 
+                        subtitle="Error bars are 95% CIs", title="Minimum nights before and after the pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+```
+
+# Checking for correlation between ratings and minimum nights
+```{r}
+#Creating a base model
+base.lm <- lm(review_scores_rating ~ period, all_reviews_listings)
+
+#Building a regression for minimum nights by periods
+base.nights.lm <- lm(review_scores_rating ~ period + minimum_nights, all_reviews_listings)
+
+#Checking for better model
+anova(base.lm, base.nights.lm)
+```
+
+# Checking for difference in price before and after pandemic
+```{r}
+#Creating linear model
+price.lm <- lm(price ~ period, all_reviews_listings)
+
+#Extracting means and 95% confidence intervals
+price.emm <- emmeans(price.lm, ~period)
+kable(price.emm, caption = "Mean scores and 95% CIs ")
+
+#Estimating the differences between means
+price.constrast <- confint(pairs(price.emm, reverse = TRUE))
+kable(price.constrast, caption = "Differences between the price before and after the pandemic")
+
+#Visualizing the estimations
+avg.price <- grid.arrange(
+                 ggplot(summary(price.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Price", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="Average Price before and after the pandemic"),
+                 
+                 ggplot(price.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Price", 
+                        subtitle="Error bars are 95% CIs", title="Price before and after the pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+```
+
+# Checking for difference in availability before and after pandemic
+```{r}
+#Creating linear model
+availability.lm <- lm(availability_90 ~ period, all_reviews_listings)
+
+#Extracting means and 95% confidence intervals
+availability.emm <- emmeans(availability.lm, ~period)
+kable(availability.emm, caption = "Mean scores and 95% CIs ")
+
+#Estimating the differences between means
+availability.constrast <- confint(pairs(availability.emm, reverse = TRUE))
+kable(availability.constrast, caption = "Differences between the mean scores before the pandemic")
+
+#Visualizing the estimations
+avg.availability <- grid.arrange(
+                 ggplot(summary(availability.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Availability for 90 days", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="90 days availability before and after the pandemic"),
+                 
+                 ggplot(availability.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Availability", 
+                        subtitle="Error bars are 95% CIs", title="Availability before and after the pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+
+#Building a regression model for available listings
+base.availability.lm <- lm(review_scores_rating ~ period + availability_90, all_reviews_listings)
+
+#Checking for better model
+anova(base.lm, base.availability.lm)
+```
+
+# Checking for difference in number of listings before and after pandemic
+```{r}
+#Creating linear model
+listing.lm <- lm(host_listings_count ~ period, all_reviews_listings)
+
+#Extracting means and 95% confidence intervals
+listing.emm <- emmeans(listing.lm, ~period)
+kable(listing.emm, caption = "Mean scores and 95% CIs ")
+
+#Estimating the differences between means
+listing.constrast <- confint(pairs(listing.emm, reverse = TRUE))
+kable(listing.constrast, caption = "Differences between the number of listings of a host before and after pandemic")
+
+#Visualizing the estimations
+avg.super <- grid.arrange(
+                 ggplot(summary(listing.emm), aes(y=emmean, x=period, ymin=lower.CL, ymax=upper.CL, color = period)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   geom_hline(yintercept=0, lty=2) +
+                   labs(x="Period", y="Number of Listings by hosts", color = "Period",
+                        subtitle="Error bars are 95% CIs", title="Number of listings of hosts before and after pandemic"),
+                 
+                 ggplot(listing.constrast, aes(y=estimate, x=contrast, ymin=lower.CL, ymax=upper.CL)) + 
+                   geom_point() + 
+                   geom_linerange() + 
+                   labs(x="Period", y="Number of Listings by hosts", 
+                        subtitle="Error bars are 95% CIs", title="Number of listings of hosts before and after pandemic") +
+                   geom_hline(yintercept=0, lty=2),
+                 
+                   ncol=2, widths = c(2,1.75))
+```
+
+# Top words by year
+```{r}
+years <- review_data_en %>% merge(all_reviews_listings[,c("row", "year")], by = "row") %>%
+  dplyr::select(listing_id,year) %>%
+  unique(.) %>% 
+  group_by(year) %>% 
+  summarise(total =n()) %>% 
+  arrange(desc(total))
+
+tokenized_year <- review_data_en %>% merge(all_reviews_listings[,c("row", "year")], by = "row") %>% 
+  dplyr::select(listing_id,year) %>% 
+  filter(year %in% years$year) %>% 
+  unique(.)
+
+year_tokens <- review_tf_idf_by_listings %>% 
+  right_join(tokenized_year) %>% group_by(year,word) %>% 
+  summarise(total=sum(n)) %>% 
+  arrange(desc(total)) 
+
+output_year <- data.frame()
+for(yearss in 1:nrow(years)){
+  print(paste0("For year: ",years$year[yearss]))
+  
+  output1 <- year_tokens %>% ungroup() %>% filter(year == years$year[yearss]) %>% top_n(15,total) %>% dplyr::select(-total) %>% mutate(rank = row_number())
+  output_year <- rbind(output_year, output1)
+}
+
+output_year %>%    ggplot(aes(fct_reorder(word, rank), rank, fill = year)) +
+                   geom_col(show.legend = FALSE) +
+                   facet_wrap(~ year, ncol = 5, scales = "free") +
+                   labs(title="Top 10 words by Years",
+                   y = "Term",
+                   x = "Rank") +
+                   coord_flip() +
+                   theme(plot.title = element_text(hjust = 0.5)) 
+```
+
+# Top_words by neighbourhood
+```{r} 
+cities <- review_data_en %>% 
+  dplyr::select(listing_id, city) %>%
+  unique(.) %>% 
+  group_by(city) %>% 
+  summarise(total =n()) %>% 
+  arrange(desc(total)) %>%
+  top_n(10)
+
+tokenized_city <- review_data_en %>%
+  dplyr::select(listing_id,city) %>% 
+  filter(city %in% cities$city) %>% 
+  unique(.)
+
+city_tokens <- review_tf_idf_by_listings %>% 
+  right_join(tokenized_city) %>% group_by(city,word) %>% 
+  summarise(total=sum(n)) %>% 
+  arrange(desc(total)) 
+
+output_city <- data.frame()
+for(citiess in 1:nrow(cities)){
+  print(paste0("For city: ",cities$city[citiess]))
+  
+  output <- city_tokens %>% ungroup() %>% filter(city == cities$city[citiess]) %>% top_n(10,total) %>% dplyr::select(-total) %>% mutate(rank = row_number())
+  output_city <- rbind(output_city, output)
+}
+
+output_city %>% group_by(city) %>%
+                   slice_max(rank, n = 10) %>%
+                   ungroup() %>%
+                   ggplot(aes(rank, fct_reorder(word, rank), fill = city)) +
+                   geom_col(show.legend = FALSE) +
+                   facet_wrap(~ city, ncol = 5, scales = "free") +
+                   labs(title="Top 10 words by City",
+                   y = "Term",
+                   x = "Rank") +
+                   theme(plot.title = element_text(hjust = 0.5))
+```
+
+# Top words by periods
+```{r} 
+periods <- review_data_en %>% 
+  dplyr::select(listing_id, period) %>%
+  unique(.) %>% 
+  group_by(period) %>% 
+  summarise(total =n()) %>% 
+  arrange(desc(total)) %>%
+  top_n(10)
+
+tokenized_period <- review_data_en %>%
+  dplyr::select(listing_id,period) %>% 
+  filter(period %in% periods$period) %>% 
+  unique(.)
+
+period_tokens <- review_tf_idf_by_listings %>% 
+  right_join(tokenized_period) %>% group_by(period,word) %>% 
+  summarise(total=sum(n)) %>% 
+  arrange(desc(total)) 
+
+output_period <- data.frame()
+for(periodss in 1:nrow(periods)){
+  print(paste0("For period: ",periods$period[periodss]))
+  
+  output <- period_tokens %>% ungroup() %>% filter(period == periods$period[periodss]) %>% top_n(10,total) %>% dplyr::select(-total) %>% mutate(rank = row_number())
+  output_period <- rbind(output_period, output)
+}
+
+output_period %>% group_by(period) %>%
+                   slice_max(rank, n = 10) %>%
+                   ungroup() %>%
+                   ggplot(aes(rank, fct_reorder(word, rank), fill = period)) +
+                   geom_col(show.legend = FALSE) +
+                   facet_wrap(~ period, ncol = 5, scales = "free") +
+                   labs(title="Top 10 words by Period",
+                   y = "Term",
+                   x = "Rank") +
+                   theme(plot.title = element_text(hjust = 0.5))
+```
