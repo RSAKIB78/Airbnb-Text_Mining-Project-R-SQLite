@@ -7,10 +7,8 @@
 * [Features](#features)
 * [Screenshots](#screenshots)
 * [Setup](#setup)
-* [Usage](#usage)
 * [Project Status](#project-status)
 * [Room for Improvement](#room-for-improvement)
-* [Acknowledgements](#acknowledgements)
 * [Contact](#contact)
 <!-- * [License](#license) -->
 
@@ -52,6 +50,3 @@ Project is: _complete_
 - Further data could be utilized in the analysis for better outcomes. This could entail the inclusion of other cities.
 - Financial and media data can be assimmilated to enhance the scope of the project. 
 - Database interaction with R could be utilized to enhance the management of the quantity of data.
-
-## Contact
-Created by [@flynerdpl](https://www.flynerd.pl/) - feel free to contact me!
