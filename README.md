@@ -1,6 +1,5 @@
-# Project Name
-> Outline a brief description of your project.
-> Live demo [_here_](https://www.example.com). <!-- If you have the project hosted somewhere, include the link here. -->
+# Understanding changes in Customer Perception due to Pandemic - Airbnb
+> 
 
 ## Table of Contents
 * [General Info](#general-information)
@@ -17,25 +16,21 @@
 
 
 ## General Information
-- Provide general information about your project here.
-- What problem does it (intend to) solve?
-- What is the purpose of your project?
-- Why did you undertake it?
-<!-- You don't have to answer all the questions - just the ones relevant to your project. -->
+Thus, this study aims to provide such detailed insights into the effect of COVID-19 on customer behaviours, which Airbnb can utilise to make necessary modifications to its services to meet customer needs based on their perception coming out of the pandemic. Ultimately, the significant textual predictors will connect changes in customer attitudes and preferences and provide predictive recommendations.![image](https://user-images.githubusercontent.com/92177575/215279183-8890a495-9837-4524-aeb5-12193727b892.png)
 
 
 ## Technologies Used
-- Tech 1 - version 1.0
-- Tech 2 - version 2.0
-- Tech 3 - version 3.0
-
+- RStudio
+- RSQLite
 
 ## Features
-List the ready features here:
-- Awesome feature 1
-- Awesome feature 2
-- Awesome feature 3
-
+- Statistical Analysis
+- T-test & Difference testing
+- Bag-of-words Analysis
+- Sentiment Analysis
+- Topic Mining
+- Predictive Analysis
+- Machine Learning
 
 ## Screenshots
 ![Example screenshot](./img/screenshot.png)
@@ -43,47 +38,20 @@ List the ready features here:
 
 
 ## Setup
-What are the project requirements/dependencies? Where are they listed? A requirements.txt or a Pipfile.lock file perhaps? Where is it located?
+Airbnb has a publicly available repository of data on “Inside Airbnb” website, which records monthly snapshots of Airbnb datasets. The data for 16 cities from various parts of the world are collected based on the popularity of the cities for tourism. The rationale is that the effects of pandemic, as seen in the most popular cities, will impact Airbnb the most as well and hence, the change in customer attitudes from these cities will be representative of the expected impact to be seen in other regions where Airbnb has active operations. The selected cities for this study are:
+ 
+1. Amsterdam 2. Bangkok 3. Barcelona 4. Hong Kong 5. Istanbul 6. London 7. Melbourne 8. New York 9. Paris 10. Porto 11. Rome 12. San Francisco 13. Singapore 14. Sydney 15. Madrid 16. Vienna
+![image](https://user-images.githubusercontent.com/92177575/215279326-3fb88d7c-a33e-4a8c-b0eb-47933b0412ab.png)
 
-Proceed to describe how to install / setup one's local environment / get started with the project.
-
-
-## Usage
-How does one go about using it?
-Provide various use cases and code examples here.
-
-`write-your-code-here`
-
+The project has been conducted on local drive upon completion of data collection
 
 ## Project Status
-Project is: _in progress_ / _complete_ / _no longer being worked on_. If you are no longer working on it, provide reasons why.
-
+Project is: _complete_
 
 ## Room for Improvement
-Include areas you believe need improvement / could be improved. Also add TODOs for future development.
-
-Room for improvement:
-- Improvement to be done 1
-- Improvement to be done 2
-
-To do:
-- Feature to be added 1
-- Feature to be added 2
-
-
-## Acknowledgements
-Give credit here.
-- This project was inspired by...
-- This project was based on [this tutorial](https://www.example.com).
-- Many thanks to...
-
+- Further data could be utilized in the analysis for better outcomes. This could entail the inclusion of other cities.
+- Financial and media data can be assimmilated to enhance the scope of the project. 
+- Database interaction with R could be utilized to enhance the management of the quantity of data.
 
 ## Contact
 Created by [@flynerdpl](https://www.flynerd.pl/) - feel free to contact me!
-
-
-<!-- Optional -->
-<!-- ## License -->
-<!-- This project is open source and available under the [... License](). -->
-
-<!-- You don't have to include all sections - just the one's relevant to your project -->
