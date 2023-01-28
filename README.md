@@ -31,9 +31,9 @@ Thus, this study aims to provide such detailed insights into the effect of COVID
 - Machine Learning
 
 ## Screenshots
-![Example screenshot](./img/screenshot.png)
-<!-- If you have screenshots you'd like to share, include them here. -->
-
+![Example screenshot](./img/Screenshot 2023-01-28 at 17.20.38.png)
+![Example screenshot](./img/Screenshot 2023-01-28 at 17.20.56.png)
+![Example screenshot](./img/Screenshot 2023-01-28 at 17.21.09.png)
 
 ## Setup
 Airbnb has a publicly available repository of data on “Inside Airbnb” website, which records monthly snapshots of Airbnb datasets. The data for 16 cities from various parts of the world are collected based on the popularity of the cities for tourism. The rationale is that the effects of pandemic, as seen in the most popular cities, will impact Airbnb the most as well and hence, the change in customer attitudes from these cities will be representative of the expected impact to be seen in other regions where Airbnb has active operations. The selected cities for this study are:
