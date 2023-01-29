@@ -11,7 +11,7 @@
 
 
 ## General Information
-Thus, this study aims to provide such detailed insights into the effect of COVID-19 on customer behaviours, which Airbnb can utilise to make necessary modifications to its services to meet customer needs based on their perception coming out of the pandemic. Ultimately, the significant textual predictors will connect changes in customer attitudes and preferences and provide predictive recommendations.
+This study aims to provide such detailed insights into the effect of COVID-19 on customer behaviours, which Airbnb can utilise to make necessary modifications to its services to meet customer needs based on their perception coming out of the pandemic. Ultimately, the significant textual predictors will connect changes in customer attitudes and preferences and provide predictive recommendations.
 
 
 ## Technologies Used
